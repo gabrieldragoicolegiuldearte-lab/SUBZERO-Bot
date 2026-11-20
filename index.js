@@ -375,11 +375,12 @@ async function applyServerStructure(guild, structure) {
 
   for (const r of structure.roles) {
     const existing = guild.roles.cache.find((role) => role.name === r.name);
+    const safeColor = sanitizeHexColor(r.color);
     const roleObj =
       existing ??
       (await guild.roles.create({
         name: r.name,
-        colors: [r.color],
+        colors: { primaryColor: safeColor },
         hoist: r.hoist,
       }));
     createdRoles.set(r.name, roleObj);
@@ -428,8 +429,20 @@ async function applyServerStructure(guild, structure) {
   return createdRoles;
 }
 
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled Rejection:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
+});
+
 const client = new Client({
   intents: [GatewayIntentBits.Guilds],
+});
+
+client.on(Events.Error, (err) => {
+  console.error('Discord Client Error:', err);
 });
 
 client.once(Events.ClientReady, async (readyClient) => {
@@ -458,9 +471,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
         .map((c) => `• **${c.name}** (${c.channels.length} canale${c.private ? ', privat' : ''})`)
         .join('\n');
 
-      return interaction.editReply(
-        `Gata! Am generat cu AI **${plan.title}**.\n**Roluri create:** ${rolesList}\n${catsList}`
-      );
+      await interaction
+        .editReply(
+          `Gata! Am generat cu AI **${plan.title}**.\n**Roluri create:** ${rolesList}\n${catsList}`
+        )
+        .catch(() => null);
+      return;
     }
 
     if (commandName === 'grad') {
@@ -469,22 +485,28 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const actiune = interaction.options.getString('actiune', true);
 
       if (!member) {
-        return interaction.reply({ content: 'Nu am găsit membrul pe server.', ...ephemeralOpts });
+        await interaction.reply({ content: 'Nu am găsit membrul pe server.', ...ephemeralOpts }).catch(() => null);
+        return;
       }
 
       if (actiune === 'add') {
         await member.roles.add(role);
-        return interaction.reply({
-          content: `Am acordat gradul **${role.name}** lui <@${member.id}>.`,
-          ...ephemeralOpts,
-        });
+        await interaction
+          .reply({
+            content: `Am acordat gradul **${role.name}** lui <@${member.id}>.`,
+            ...ephemeralOpts,
+          })
+          .catch(() => null);
       } else {
         await member.roles.remove(role);
-        return interaction.reply({
-          content: `Am scos gradul **${role.name}** de la <@${member.id}>.`,
-          ...ephemeralOpts,
-        });
+        await interaction
+          .reply({
+            content: `Am scos gradul **${role.name}** de la <@${member.id}>.`,
+            ...ephemeralOpts,
+          })
+          .catch(() => null);
       }
+      return;
     }
 
     if (commandName === 'drop') {
@@ -499,64 +521,74 @@ client.on(Events.InteractionCreate, async (interaction) => {
         .setTimestamp();
 
       await canal.send({ embeds: [embed] });
-      return interaction.reply({ content: `Drop postat în <#${canal.id}>.`, ...ephemeralOpts });
+      await interaction.reply({ content: `Drop postat în <#${canal.id}>.`, ...ephemeralOpts }).catch(() => null);
+      return;
     }
 
     if (commandName === 'wipe') {
       const confirmare = interaction.options.getString('confirmare', true);
 
       if (confirmare !== 'STERGE TOT') {
-        return interaction.reply({
-          content: 'Anulat. Ca să confirmi ștergerea totală, scrie exact `STERGE TOT` la opțiunea `confirmare`.',
-          ...ephemeralOpts,
-        });
+        await interaction
+          .reply({
+            content: 'Anulat. Ca să confirmi ștergerea totală, scrie exact `STERGE TOT` la opțiunea `confirmare`.',
+            ...ephemeralOpts,
+          })
+          .catch(() => null);
+        return;
       }
 
-      await interaction.deferReply(ephemeralOpts);
+      await interaction.reply({ content: 'Șterg tot...', ...ephemeralOpts }).catch(() => null);
 
-      // Șterge toate canalele și categoriile (copiile de canale mai întâi, apoi categoriile)
-      const channels = await guild.channels.fetch();
+      const channels = await guild.channels.fetch().catch(() => null);
       let deletedChannels = 0;
 
-      for (const [, ch] of channels) {
-        if (!ch || ch.type === ChannelType.GuildCategory) continue;
-        const ok = await ch
-          .delete('Wipe total comandat de administrator')
-          .then(() => true)
-          .catch(() => false);
-        if (ok) deletedChannels++;
+      if (channels) {
+        for (const [, ch] of channels) {
+          if (!ch || ch.type === ChannelType.GuildCategory) continue;
+          const ok = await ch
+            .delete('Wipe total comandat de administrator')
+            .then(() => true)
+            .catch(() => false);
+          if (ok) deletedChannels++;
+        }
+
+        for (const [, ch] of channels) {
+          if (!ch || ch.type !== ChannelType.GuildCategory) continue;
+          const ok = await ch
+            .delete('Wipe total categorii comandat de administrator')
+            .then(() => true)
+            .catch(() => false);
+          if (ok) deletedChannels++;
+        }
       }
 
-      for (const [, ch] of channels) {
-        if (!ch || ch.type !== ChannelType.GuildCategory) continue;
-        const ok = await ch
-          .delete('Wipe total categorii comandat de administrator')
-          .then(() => true)
-          .catch(() => false);
-        if (ok) deletedChannels++;
-      }
-
-      // Șterge toate rolurile posibile de sub rolul botului (fără @everyone, roluri managed sau roluri peste bot)
       const me = guild.members.me ?? (await guild.members.fetchMe().catch(() => null));
-      const roles = await guild.roles.fetch();
+      const roles = await guild.roles.fetch().catch(() => null);
       let deletedRoles = 0;
 
-      for (const [, role] of roles) {
-        if (!role) continue;
-        if (role.id === guild.roles.everyone.id) continue;
-        if (role.managed) continue;
-        if (me && role.position >= me.roles.highest.position) continue;
+      if (roles) {
+        for (const [, role] of roles) {
+          if (!role) continue;
+          if (role.id === guild.roles.everyone.id) continue;
+          if (role.managed) continue;
+          if (me && role.position >= me.roles.highest.position) continue;
 
-        const ok = await role
-          .delete('Wipe total roluri comandat de administrator')
-          .then(() => true)
-          .catch(() => false);
-        if (ok) deletedRoles++;
+          const ok = await role
+            .delete('Wipe total roluri comandat de administrator')
+            .then(() => true)
+            .catch(() => false);
+          if (ok) deletedRoles++;
+        }
       }
 
-      return interaction.editReply(
-        `Wipe complet: **${deletedChannels}** canale/categorii șterse și **${deletedRoles}** roluri șterse. Nu am creat nimic nou.`
-      );
+      console.log(`Wipe complet: ${deletedChannels} canale/categorii șterse, ${deletedRoles} roluri șterse.`);
+      await interaction
+        .editReply(
+          `Wipe complet: **${deletedChannels}** canale/categorii șterse și **${deletedRoles}** roluri șterse. Nu am creat nimic nou.`
+        )
+        .catch(() => null);
+      return;
     }
   } catch (err) {
     console.error(err);
