@@ -12,8 +12,12 @@ const {
   MessageFlags,
 } = require('discord.js');
 
-const PRIMARY_GEMINI_MODEL = 'gemini-3.8-flash';
-const FALLBACK_GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-2.5-flash'];
+const GEMINI_MODELS = [
+  'gemini-3.8-flash',
+  'gemini-3.7-flash',
+  'gemini-3.6-flash',
+  'gemini-3.1-flash-lite',
+];
 
 function buildGeminiUrl(modelName, apiKey) {
   return (
@@ -293,7 +297,7 @@ function buildChannelOverwrites(guild, ch, createdRoles, isPrivateCat) {
   return overwrites;
 }
 
-async function fetchWithTimeout(url, options, timeoutMs = 20000) {
+async function fetchWithTimeout(url, options, timeoutMs = 30000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -312,7 +316,7 @@ async function callGeminiWithRetry(payload, maxRetries = 4) {
   let lastErrorText = '';
   let lastStatus = 0;
 
-  for (const modelName of FALLBACK_GEMINI_MODELS) {
+  for (const modelName of GEMINI_MODELS) {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       let response;
       try {
@@ -323,14 +327,19 @@ async function callGeminiWithRetry(payload, maxRetries = 4) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
           },
-          20000
+          30000
         );
       } catch (fetchErr) {
         lastStatus = 0;
-        lastErrorText = fetchErr?.name === 'AbortError' ? 'Timeout la răspunsul Gemini' : (fetchErr?.message || String(fetchErr));
+        lastErrorText =
+          fetchErr?.name === 'AbortError'
+            ? 'Timeout 30s la răspunsul Gemini'
+            : fetchErr?.message || String(fetchErr);
         if (attempt < maxRetries) {
           const waitMs = attempt * 2000;
-          console.warn(`Gemini (${modelName}) eroare rețea/timeout (încercarea ${attempt}/${maxRetries}). Reîncerc în ${waitMs / 1000}s...`);
+          console.warn(
+            `Gemini (${modelName}) eroare rețea/timeout (încercarea ${attempt}/${maxRetries}). Reîncerc în ${waitMs / 1000}s...`
+          );
           await new Promise((resolve) => setTimeout(resolve, waitMs));
           continue;
         }
@@ -346,7 +355,9 @@ async function callGeminiWithRetry(payload, maxRetries = 4) {
 
       if (response.status === 503 && attempt < maxRetries) {
         const waitMs = attempt * 2000;
-        console.warn(`Gemini (${modelName}) 503 (încercarea ${attempt}/${maxRetries}). Reîncerc în ${waitMs / 1000}s...`);
+        console.warn(
+          `Gemini (${modelName}) 503 (încercarea ${attempt}/${maxRetries}). Reîncerc în ${waitMs / 1000}s...`
+        );
         await new Promise((resolve) => setTimeout(resolve, waitMs));
         continue;
       }
@@ -359,7 +370,7 @@ async function callGeminiWithRetry(payload, maxRetries = 4) {
     }
   }
 
-  throw new Error(`Eroare Gemini API (${lastStatus}): ${lastErrorText.slice(0, 200)}`);
+  throw new Error(`Eroare Gemini API (${lastStatus}): ${lastErrorText.slice(0, 180)}`);
 }
 
 async function generateFullCustomPlanWithAI(promptText) {
@@ -447,33 +458,35 @@ Reguli:
 
   const parsed = JSON.parse(cleaned);
 
-  const roles = Array.isArray(parsed.roles) && parsed.roles.length
-    ? parsed.roles.slice(0, 10).map((r, idx) => ({
-        name: String(r.name || `Grad ${idx + 1}`).slice(0, 60),
-        color: sanitizeHexColor(r.color),
-        hoist: Boolean(r.hoist),
-        staffOrMod: Boolean(r.staffOrMod),
-      }))
-    : RESELL_VARIANTS['full-resell'].roles;
+  const roles =
+    Array.isArray(parsed.roles) && parsed.roles.length
+      ? parsed.roles.slice(0, 10).map((r, idx) => ({
+          name: String(r.name || `Grad ${idx + 1}`).slice(0, 60),
+          color: sanitizeHexColor(r.color),
+          hoist: Boolean(r.hoist),
+          staffOrMod: Boolean(r.staffOrMod),
+        }))
+      : RESELL_VARIANTS['full-resell'].roles;
 
-  const cats = Array.isArray(parsed.cats) && parsed.cats.length
-    ? parsed.cats.slice(0, 7).map((c, idx) => ({
-        name: String(c.name || `📁 CATEGORIE ${idx + 1}`).slice(0, 80),
-        private: Boolean(c.private),
-        allowRoles: Array.isArray(c.allowRoles) ? c.allowRoles.map(String) : [],
-        channels: Array.isArray(c.channels)
-          ? c.channels
-              .map((ch) => ({
-                name: sanitizeChannelName(typeof ch === 'string' ? ch : ch?.name),
-                type: ch?.type === 'voice' || String(ch?.name || '').startsWith('vc-') ? 'voice' : 'text',
-                readOnlyForMembers: Boolean(ch?.readOnlyForMembers),
-                allowedWriters: Array.isArray(ch?.allowedWriters) ? ch.allowedWriters.map(String) : [],
-              }))
-              .filter((ch) => Boolean(ch.name))
-              .slice(0, 12)
-          : [],
-      }))
-    : RESELL_VARIANTS['full-resell'].cats;
+  const cats =
+    Array.isArray(parsed.cats) && parsed.cats.length
+      ? parsed.cats.slice(0, 7).map((c, idx) => ({
+          name: String(c.name || `📁 CATEGORIE ${idx + 1}`).slice(0, 80),
+          private: Boolean(c.private),
+          allowRoles: Array.isArray(c.allowRoles) ? c.allowRoles.map(String) : [],
+          channels: Array.isArray(c.channels)
+            ? c.channels
+                .map((ch) => ({
+                  name: sanitizeChannelName(typeof ch === 'string' ? ch : ch?.name),
+                  type: ch?.type === 'voice' || String(ch?.name || '').startsWith('vc-') ? 'voice' : 'text',
+                  readOnlyForMembers: Boolean(ch?.readOnlyForMembers),
+                  allowedWriters: Array.isArray(ch?.allowedWriters) ? ch.allowedWriters.map(String) : [],
+                }))
+                .filter((ch) => Boolean(ch.name))
+                .slice(0, 12)
+            : [],
+        }))
+      : RESELL_VARIANTS['full-resell'].cats;
 
   return {
     title: String(parsed.title || 'Server Personalizat AI').slice(0, 80),
@@ -742,10 +755,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
   } catch (err) {
     console.error(err);
-    const msg =
-      err?.message?.includes('GEMINI_API_KEY')
-        ? 'Nu este setată variabila `GEMINI_API_KEY` în mediul botului / pe Pella.'
-        : 'Eroare la rularea comenzii. Verifică rolul botului, permisiunile și cheia `GEMINI_API_KEY`.';
+    const shortErr = String(err?.message || err).slice(0, 220);
+    const msg = `Eroare la rularea comenzii: \`${shortErr}\``;
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply({ content: msg }).catch(() => null);
     } else {
