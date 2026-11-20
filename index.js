@@ -11,6 +11,17 @@ const {
   EmbedBuilder,
 } = require('discord.js');
 
+const GEMINI_MODEL = 'gemini-2.5-flash';
+
+function buildGeminiUrl(apiKey) {
+  return (
+    'https://generativelanguage.googleapis.com/v1beta/models/' +
+    GEMINI_MODEL +
+    ':generateContent?key=' +
+    encodeURIComponent(apiKey)
+  );
+}
+
 const RESELL_VARIANTS = {
   'sneakers-streetwear': {
     label: 'Sneakers & Streetwear',
@@ -319,7 +330,7 @@ Format exact:
         },
         {
           "name": "discutii-trotinete",
-          "type": "text",
+          "type: 'text',
           "readOnlyForMembers": false,
           "allowedWriters": []
         },
@@ -341,30 +352,25 @@ Reguli:
 - Setează "readOnlyForMembers": true pe canalele unde scriu doar gradele superioare / organizatorii / rolurile speciale ("allowedWriters"), iar restul pot doar citi.
 - Marchează cu "private": true doar categoriile interne de staff / organizare, cu "allowRoles" setat.`;
 
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(
-      apiKey
-    )}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        systemInstruction: {
-          parts: [{ text: systemInstruction }],
+  const response = await fetch(buildGeminiUrl(apiKey), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      systemInstruction: {
+        parts: [{ text: systemInstruction }],
+      },
+      contents: [
+        {
+          role: 'user',
+          parts: [{ text: `Cerere server: ${promptText}` }],
         },
-        contents: [
-          {
-            role: 'user',
-            parts: [{ text: `Cerere server: ${promptText}` }],
-          },
-        ],
-        generationConfig: {
-          temperature: 0.75,
-          responseMimeType: 'application/json',
-        },
-      }),
-    }
-  );
+      ],
+      generationConfig: {
+        temperature: 0.75,
+        responseMimeType: 'application/json',
+      },
+    }),
+  });
 
   if (!response.ok) {
     const errText = await response.text().catch(() => '');
@@ -486,26 +492,21 @@ async function checkGeminiConnection() {
   }
 
   try {
-    const response = await fetch(
-      `[https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$](https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$){encodeURIComponent(
-        apiKey
-      )}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [
-            {
-              role: 'user',
-              parts: [{ text: 'Răspunde cu un singur cuvânt: OK' }],
-            },
-          ],
-          generationConfig: {
-            maxOutputTokens: 10,
+    const response = await fetch(buildGeminiUrl(apiKey), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: 'Răspunde cu un singur cuvânt: OK' }],
           },
-        }),
-      }
-    );
+        ],
+        generationConfig: {
+          maxOutputTokens: 10,
+        },
+      }),
+    });
 
     if (!response.ok) {
       const errText = await response.text().catch(() => '');
