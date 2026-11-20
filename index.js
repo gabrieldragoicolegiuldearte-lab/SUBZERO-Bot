@@ -257,7 +257,7 @@ const commands = [
 ].map((c) => c.toJSON());
 
 function sanitizeChannelName(raw) {
-  return String(raw || '')
+  return String(raw ?? '')
     .trim()
     .toLowerCase()
     .replace(/\s+/g, '-')
@@ -284,7 +284,8 @@ function buildChannelOverwrites(guild, ch, createdRoles, isPrivateCat) {
     },
   ];
 
-  for (const roleName of ch.allowedWriters || []) {
+  const writers = ch.allowedWriters ?? [];
+  for (const roleName of writers) {
     const roleObj = createdRoles.get(roleName);
     if (roleObj) {
       overwrites.push({
@@ -329,7 +330,8 @@ async function resolveGroqModels(groqKey) {
   }
 
   const json = await res.json();
-  const ids = Array.isArray(json?.data) ? json.data.map((m) => String(m?.id || '')).filter(Boolean) : [];
+  const rawList = json?.data ?? [];
+  const ids = Array.isArray(rawList) ? rawList.map((m) => String(m?.id ?? '')).filter(Boolean) : [];
 
   const preferred = ids.filter(
     (id) =>
@@ -367,7 +369,7 @@ async function callGroq(fullPrompt) {
         }
       } else {
         const errText = await response.text().catch(() => '');
-        lastError = `Groq (${modelName})${response.status}: ${errText.slice(0, 140)}`; console.warn(lastError); } } catch (err) { lastError = `Groq (${modelName}) eroare: ${err?.message \vert{}\vert{} err}`; console.warn(lastError); } }  throw new Error(lastError \vert{}\vert{} 'Groq nu a răspuns.'); }  async function callGeminiFallback(fullPrompt) { const apiKey = process.env.GEMINI_API_KEY; if (!apiKey) { throw new Error('Nu este setată nicio cheie validă (GROQ_API_KEY sau GEMINI_API_KEY).'); }  let lastStatus = 0; let lastErrorText = '';  for (const modelName of GEMINI_MODELS) { for (let attempt = 1; attempt <= 2; attempt++) { let response; try { response = await fetchWithTimeout( buildGeminiUrl(modelName, apiKey), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: fullPrompt }] }], generationConfig: { temperature: 0.75 }, }), }, 25000 ); } catch (fetchErr) { lastStatus = 0; lastErrorText = fetchErr?.message \vert{}\vert{} String(fetchErr); if (attempt < 2) { await new Promise((r) => setTimeout(r, 2000)); continue; } break; }  if (response.ok) { const data = await response.json(); const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text; if (rawText) { console.log(`Gemini (${modelName}) a răspuns cu succes!`);
+        lastError = `Groq (${modelName})${response.status}: ${errText.slice(0, 140)}`; console.warn(lastError); } } catch (err) { const detail = err?.message ?? err; lastError = `Groq (${modelName}) eroare: ${detail}`; console.warn(lastError); } }  throw new Error(lastError ? lastError : 'Groq nu a răspuns.'); }  async function callGeminiFallback(fullPrompt) { const apiKey = process.env.GEMINI_API_KEY; if (!apiKey) { throw new Error('Nu este setată nicio cheie validă (GROQ_API_KEY sau GEMINI_API_KEY).'); }  let lastStatus = 0; let lastErrorText = '';  for (const modelName of GEMINI_MODELS) { for (let attempt = 1; attempt <= 2; attempt++) { let response; try { response = await fetchWithTimeout( buildGeminiUrl(modelName, apiKey), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: fullPrompt }] }], generationConfig: { temperature: 0.75 }, }), }, 25000 ); } catch (fetchErr) { lastStatus = 0; lastErrorText = fetchErr?.message ?? String(fetchErr); if (attempt < 2) { await new Promise((r) => setTimeout(r, 2000)); continue; } break; }  if (response.ok) { const data = await response.json(); const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text; if (rawText) { console.log(`Gemini (${modelName}) a răspuns cu succes!`);
           return rawText;
         }
       }
@@ -450,7 +452,7 @@ Cerere server: ${promptText}`;
     try {
       rawText = await callGroq(fullPrompt);
     } catch (groqErr) {
-      groqErrMsg = groqErr?.message || String(groqErr);
+      groqErrMsg = groqErr?.message ?? String(groqErr);
       console.warn('Groq a eșuat, trec pe rezerva Gemini:', groqErrMsg);
     }
   }
@@ -459,10 +461,11 @@ Cerere server: ${promptText}`;
     try {
       rawText = await callGeminiFallback(fullPrompt);
     } catch (gemErr) {
+      const gemDetail = gemErr?.message ?? gemErr;
       if (groqErrMsg) {
-        throw new Error(`Groq: ${groqErrMsg} | Gemini: ${gemErr?.message || gemErr}`);
+        throw new Error(`Groq: ${groqErrMsg} | Gemini: ${gemDetail}`);
       }
-      throw gemErr;
+      throw new Error(String(gemDetail));
     }
   }
 
@@ -482,7 +485,7 @@ Cerere server: ${promptText}`;
   const roles =
     Array.isArray(parsed.roles) && parsed.roles.length
       ? parsed.roles.slice(0, 10).map((r, idx) => ({
-          name: String(r.name || `Grad ${idx + 1}`).slice(0, 60),
+          name: String(r.name ?? `Grad ${idx + 1}`).slice(0, 60),
           color: sanitizeHexColor(r.color),
           hoist: Boolean(r.hoist),
           staffOrMod: Boolean(r.staffOrMod),
@@ -492,14 +495,14 @@ Cerere server: ${promptText}`;
   const cats =
     Array.isArray(parsed.cats) && parsed.cats.length
       ? parsed.cats.slice(0, 7).map((c, idx) => ({
-          name: String(c.name || `📁 CATEGORIE ${idx + 1}`).slice(0, 80),
+          name: String(c.name ?? `📁 CATEGORIE ${idx + 1}`).slice(0, 80),
           private: Boolean(c.private),
           allowRoles: Array.isArray(c.allowRoles) ? c.allowRoles.map(String) : [],
           channels: Array.isArray(c.channels)
             ? c.channels
                 .map((ch) => ({
                   name: sanitizeChannelName(typeof ch === 'string' ? ch : ch?.name),
-                  type: ch?.type === 'voice' || String(ch?.name || '').startsWith('vc-') ? 'voice' : 'text',
+                  type: ch?.type === 'voice' || String(ch?.name ?? '').startsWith('vc-') ? 'voice' : 'text',
                   readOnlyForMembers: Boolean(ch?.readOnlyForMembers),
                   allowedWriters: Array.isArray(ch?.allowedWriters) ? ch.allowedWriters.map(String) : [],
                 }))
@@ -510,7 +513,7 @@ Cerere server: ${promptText}`;
       : RESELL_VARIANTS['full-resell'].cats;
 
   return {
-    title: String(parsed.title || 'Server Personalizat AI').slice(0, 80),
+    title: String(parsed.title ?? 'Server Personalizat AI').slice(0, 80),
     baseRoleName: typeof parsed.baseRoleName === 'string' ? parsed.baseRoleName.slice(0, 60) : null,
     roles,
     cats,
@@ -523,7 +526,7 @@ async function applyServerStructure(guild, structure) {
   for (const r of structure.roles) {
     const existing = guild.roles.cache.find((role) => role.name === r.name);
     const roleObj =
-      existing ||
+      existing ??
       (await guild.roles.create({
         name: r.name,
         color: r.color,
@@ -541,7 +544,8 @@ async function applyServerStructure(guild, structure) {
         deny: [PermissionFlagsBits.ViewChannel],
       });
 
-      for (const roleName of cat.allowRoles || []) {
+      const allowed = cat.allowRoles ?? [];
+      for (const roleName of allowed) {
         const roleObj = createdRoles.get(roleName);
         if (roleObj) {
           overwrites.push({
@@ -588,7 +592,7 @@ client.once(Events.ClientReady, async (readyClient) => {
 
 client.on(Events.GuildMemberAdd, async (member) => {
   const candidateRole =
-    member.guild.roles.cache.find((r) => r.name === 'Customer') ||
+    member.guild.roles.cache.find((r) => r.name === 'Customer') ??
     member.guild.roles.cache.find((r) => /membru|member|rider/i.test(r.name));
   if (candidateRole) {
     await member.roles.add(candidateRole).catch(() => null);
@@ -606,7 +610,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       const variantKey = interaction.options.getString('varianta', true);
       const variant = RESELL_VARIANTS[variantKey];
-      const extra = (interaction.options.getString('extra') || '')
+      const rawExtra = interaction.options.getString('extra') ?? '';
+      const extra = rawExtra
         .split(',')
         .map(sanitizeChannelName)
         .filter(Boolean);
@@ -680,7 +685,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (commandName === 'drop') {
       const produs = interaction.options.getString('produs', true);
       const pret = interaction.options.getString('pret', true);
-      const canal = interaction.options.getChannel('canal') || interaction.channel;
+      const canal = interaction.options.getChannel('canal') ?? interaction.channel;
 
       const embed = new EmbedBuilder()
         .setTitle(`📦 DROP / STOC: ${produs}`)
@@ -749,7 +754,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
   } catch (err) {
     console.error(err);
-    const shortErr = String(err?.message || err).slice(0, 220);
+    const errRaw = err?.message ?? err;
+    const shortErr = String(errRaw).slice(0, 220);
     const msg = `Eroare la rularea comenzii: \`${shortErr}\``;
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply({ content: msg }).catch(() => null);
