@@ -9,6 +9,10 @@ const {
   PermissionFlagsBits,
   Events,
   EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  AttachmentBuilder,
   MessageFlags,
 } = require('discord.js');
 
@@ -34,6 +38,9 @@ const BAN_DELETE_SECONDS = {
   '24h': { label: 'Ultimele 24h', seconds: 86400 },
   '7d': { label: 'Ultimele 7 zile', seconds: 604800 },
 };
+
+const TICKET_OPEN_BTN_ID = 'subzero_ticket_open_buy';
+const TICKET_CLOSE_BTN_ID = 'subzero_ticket_close';
 
 let cachedGroqModels = null;
 
@@ -75,8 +82,19 @@ const commands = [
     .addStringOption((o) =>
       o
         .setName('descriere')
-        .setDescription('Scrie-i botului exact ce să facă (orice tematică, roluri, canale, permisiuni, resell etc.)')
+        .setDescription('Scrie-i botului exact ce să facă (roluri, categorii, canale, permisiuni de scriere/vizualizare etc.)')
         .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName('ticket-panel')
+    .setDescription('Postează panoul cu butonul de cumpărare / deschidere ticket')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addChannelOption((o) =>
+      o
+        .setName('canal')
+        .setDescription('Canalul unde se postează panoul de tickete')
+        .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
     ),
 
   new SlashCommandBuilder()
@@ -188,6 +206,59 @@ function sanitizeChannelName(raw) {
     .slice(0, 95);
 }
 
+function normalizeLookupName(raw) {
+  return String(raw ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function findTicketLogChannel(guild) {
+  const candidates = guild.channels.cache.filter(
+    (ch) => ch && (ch.type === ChannelType.GuildText || ch.type === ChannelType.GuildAnnouncement)
+  );
+
+  for (const [, ch] of candidates) {
+    const norm = normalizeLookupName(ch.name);
+    if (
+      norm === 'log tickete' ||
+      norm === 'logs tickete' ||
+      norm === 'ticket logs' ||
+      norm === 'ticket log' ||
+      (norm.includes('log') && norm.includes('ticket'))
+    ) {
+      return ch;
+    }
+  }
+
+  return null;
+}
+
+function resolveRoleByName(createdRoles, guild, roleName) {
+  if (!roleName) return null;
+  if (createdRoles.has(roleName)) {
+    return createdRoles.get(roleName);
+  }
+
+  const targetNorm = normalizeLookupName(roleName);
+  if (!targetNorm) return null;
+
+  for (const [k, roleObj] of createdRoles.entries()) {
+    const kNorm = normalizeLookupName(k);
+    if (kNorm === targetNorm || kNorm.includes(targetNorm) || targetNorm.includes(kNorm)) {
+      return roleObj;
+    }
+  }
+
+  const guildRole = guild.roles.cache.find((r) => {
+    if (r.id === guild.roles.everyone.id) return false;
+    const rNorm = normalizeLookupName(r.name);
+    return rNorm === targetNorm || rNorm.includes(targetNorm) || targetNorm.includes(rNorm);
+  });
+
+  return guildRole ?? null;
+}
+
 function sanitizeHexColor(raw, fallback = '#5865F2') {
   if (typeof raw === 'string' && /^#[0-9A-Fa-f]{6}$/.test(raw.trim())) {
     return raw.trim();
@@ -195,25 +266,80 @@ function sanitizeHexColor(raw, fallback = '#5865F2') {
   return fallback;
 }
 
-function buildChannelOverwrites(guild, ch, createdRoles, isPrivateCat) {
-  if (isPrivateCat || ch.type === 'voice' || !ch.readOnlyForMembers) {
+function buildCategoryOverwrites(guild, cat, createdRoles) {
+  if (!cat.private) {
     return [];
   }
 
   const overwrites = [
     {
       id: guild.roles.everyone.id,
+      deny: [PermissionFlagsBits.ViewChannel],
+    },
+  ];
+
+  const allowed = cat.allowRoles ?? [];
+  for (const roleName of allowed) {
+    const roleObj = resolveRoleByName(createdRoles, guild, roleName);
+    if (roleObj) {
+      overwrites.push({
+        id: roleObj.id,
+        allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
+      });
+    }
+  }
+
+  return overwrites;
+}
+
+function buildChannelOverwrites(guild, ch, createdRoles, isPrivateCat) {
+  if (isPrivateCat) {
+    return [];
+  }
+
+  if (ch.type === 'voice') {
+    if (!ch.readOnlyForMembers) return [];
+    const overwrites = [
+      {
+        id: guild.roles.everyone.id,
+        deny: [PermissionFlagsBits.Connect],
+      },
+    ];
+    for (const roleName of ch.allowedWriters ?? []) {
+      const roleObj = resolveRoleByName(createdRoles, guild, roleName);
+      if (roleObj) {
+        overwrites.push({
+          id: roleObj.id,
+          allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect, PermissionFlagsBits.Speak],
+        });
+      }
+    }
+    return overwrites;
+  }
+
+  if (!ch.readOnlyForMembers) {
+    return [];
+  }
+
+  const overwrites = [
+    {
+      id: guild.roles.everyone.id,
+      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory],
       deny: [PermissionFlagsBits.SendMessages],
     },
   ];
 
   const writers = ch.allowedWriters ?? [];
   for (const roleName of writers) {
-    const roleObj = createdRoles.get(roleName);
+    const roleObj = resolveRoleByName(createdRoles, guild, roleName);
     if (roleObj) {
       overwrites.push({
         id: roleObj.id,
-        allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages],
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.ReadMessageHistory,
+          PermissionFlagsBits.SendMessages,
+        ],
       });
     }
   }
@@ -311,21 +437,20 @@ async function callGroq(fullPrompt) {
 }
 
 async function generateFullCustomPlanWithAI(promptText) {
-  const fullPrompt = `Ești un designer profesionist de servere Discord. Primești orice instrucțiune / cerere de la utilizator în limba română (poate fi orice tematică: trotinete electrice, meet & greet, resell sneakers/tech/conturi, gaming, muzică, comunitate, etc., sau instrucțiuni exacte despre roluri, categorii, canale și permisiuni) și construiești exact structura cerută.
+  const fullPrompt = `Ești un designer profesionist de servere Discord. Primești orice instrucțiune / cerere de la utilizator în limba română (poate fi orice tematică sau cerințe exacte de roluri, categorii, canale și permisiuni) și construiești exact structura cerută.
 Întoarce DOAR JSON valid (fără markdown, fără \`\`\`json, fără text suplimentar).
 
 Format exact:
 {
   "title": "Titlu scurt și clar",
   "roles": [
-    { "name": "Fondator / Admin", "color": "#FF3B30", "hoist": true, "staffOrMod": true },
-    { "name": "Organizator Meet", "color": "#F59E0B", "hoist": true, "staffOrMod": true },
-    { "name": "Pro Rider", "color": "#3B82F6", "hoist": true, "staffOrMod": false },
-    { "name": "Rider / Membru", "color": "#94A3B8", "hoist": false, "staffOrMod": false }
+    { "name": "Owner / Admin", "color": "#FF3B30", "hoist": true, "staffOrMod": true },
+    { "name": "Staff", "color": "#F59E0B", "hoist": true, "staffOrMod": true },
+    { "name": "VIP / Membru", "color": "#5865F2", "hoist": true, "staffOrMod": false }
   ],
   "cats": [
     {
-      "name": "🛴 INFO & MEET & GREET",
+      "name": "📌 INFORMAȚII",
       "private": false,
       "allowRoles": [],
       "channels": [
@@ -333,23 +458,17 @@ Format exact:
           "name": "reguli",
           "type": "text",
           "readOnlyForMembers": true,
-          "allowedWriters": ["Fondator / Admin", "Organizator Meet"]
+          "allowedWriters": ["Owner / Admin", "Staff"]
         },
         {
-          "name": "anunturi-meetgreet",
+          "name": "anunturi",
           "type": "text",
           "readOnlyForMembers": true,
-          "allowedWriters": ["Fondator / Admin", "Organizator Meet"]
+          "allowedWriters": ["Owner / Admin", "Staff"]
         },
         {
-          "name": "discutii-trotinete",
+          "name": "general",
           "type": "text",
-          "readOnlyForMembers": false,
-          "allowedWriters": []
-        },
-        {
-          "name": "vc-meetgreet",
-          "type": "voice",
           "readOnlyForMembers": false,
           "allowedWriters": []
         }
@@ -358,12 +477,11 @@ Format exact:
   ]
 }
 
-Reguli:
-- Respectă întocmai tot ce cere utilizatorul în instrucțiune (nume de categorii, canale, roluri, permisiuni, tematică).
-- Creează până la 8 categorii și până la 12 canale per categorie, relevante exact pentru cerere.
+Reguli stricte pentru permisiuni:
+- Când utilizatorul spune că pe un canal / categorie "nu pot scrie toți" sau "scriu doar anumite roluri / admini / staff / VIP": setează "readOnlyForMembers": true pe acel canal și pune în "allowedWriters" numele EXACT al rolurilor din array-ul "roles" care au voie să scrie (ex: ["Owner / Admin", "Staff"]).
+- Când utilizatorul cere o categorie sau un canal privat ("doar pentru staff / admini / anumite roluri"): setează "private": true și pune în "allowRoles" numele EXACT al rolurilor din "roles".
+- Folosește EXACT aceleași nume de roluri în "roles", "allowRoles" și "allowedWriters" (nu prescurta și nu schimba denumirea între secțiuni).
 - Numele canalelor: litere mici, cifre, cratimă (fără spații/diacritice). Pentru canalele vocale folosește "type": "voice".
-- Setează "readOnlyForMembers": true pe canalele unde scriu doar anumite roluri ("allowedWriters"), iar restul pot doar citi.
-- Marchează cu "private": true doar categoriile private / interne, cu "allowRoles" setat.
 
 Instrucțiune utilizator: ${promptText}`;
 
@@ -458,46 +576,283 @@ async function applyServerStructure(guild, structure) {
   }
 
   for (const cat of structure.cats) {
-    const overwrites = [];
+    const overwrites = buildCategoryOverwrites(guild, cat, createdRoles);
 
-    if (cat.private) {
-      overwrites.push({
-        id: guild.roles.everyone.id,
-        deny: [PermissionFlagsBits.ViewChannel],
-      });
+    const existingCat = guild.channels.cache.find(
+      (c) => c.type === ChannelType.GuildCategory && normalizeLookupName(c.name) === normalizeLookupName(cat.name)
+    );
 
-      const allowed = cat.allowRoles ?? [];
-      for (const roleName of allowed) {
-        const roleObj = createdRoles.get(roleName);
-        if (roleObj) {
-          overwrites.push({
-            id: roleObj.id,
-            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages],
-          });
-        }
-      }
-    }
-
-    const category = await guild.channels.create({
-      name: cat.name,
-      type: ChannelType.GuildCategory,
-      permissionOverwrites: overwrites,
-    });
+    const category = existingCat
+      ? await existingCat.edit({ permissionOverwrites: overwrites }).catch(() => existingCat)
+      : await guild.channels.create({
+          name: cat.name,
+          type: ChannelType.GuildCategory,
+          permissionOverwrites: overwrites,
+        });
 
     for (const ch of cat.channels) {
       const isVoice = ch.type === 'voice';
+      const targetType = isVoice ? ChannelType.GuildVoice : ChannelType.GuildText;
       const chOverwrites = buildChannelOverwrites(guild, ch, createdRoles, Boolean(cat.private));
 
-      await guild.channels.create({
-        name: ch.name,
-        type: isVoice ? ChannelType.GuildVoice : ChannelType.GuildText,
-        parent: category.id,
-        permissionOverwrites: chOverwrites,
-      });
+      const existingCh = guild.channels.cache.find(
+        (c) => c.type === targetType && c.name === ch.name
+      );
+
+      if (existingCh) {
+        await existingCh
+          .edit({
+            parent: category.id,
+            permissionOverwrites: chOverwrites,
+          })
+          .catch(() => null);
+      } else {
+        await guild.channels.create({
+          name: ch.name,
+          type: targetType,
+          parent: category.id,
+          permissionOverwrites: chOverwrites,
+        });
+      }
     }
   }
 
   return createdRoles;
+}
+
+function buildTicketPanelMessage() {
+  const embed = new EmbedBuilder()
+    .setTitle('🛒 Cumpără / Deschide Ticket')
+    .setDescription(
+      'Apasă pe butonul de mai jos ca să deschizi un ticket privat.\nAcolo poți vorbi direct despre comandă, produs sau detaliile de cumpărare.'
+    )
+    .setColor('#22C55E')
+    .setTimestamp();
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(TICKET_OPEN_BTN_ID)
+      .setLabel('Cumpără / Deschide Ticket')
+      .setEmoji('🛒')
+      .setStyle(ButtonStyle.Success)
+  );
+
+  return { embeds: [embed], components: [row] };
+}
+
+async function createTicketChannel(guild, openerUser) {
+  const cleanUser = sanitizeChannelName(openerUser.username) || 'user';
+  const shortSuffix = String(openerUser.id).slice(-4);
+  const channelName = `ticket-${cleanUser}-${shortSuffix}`.slice(0, 95);
+
+  let ticketCat = guild.channels.cache.find(
+    (c) => c.type === ChannelType.GuildCategory && /^🎟️?\s*TICKETE/i.test(c.name)
+  );
+
+  if (!ticketCat) {
+    ticketCat = await guild.channels
+      .create({
+        name: '🎟️ TICKETE',
+        type: ChannelType.GuildCategory,
+      })
+      .catch(() => null);
+  }
+
+  const overwrites = [
+    {
+      id: guild.roles.everyone.id,
+      deny: [PermissionFlagsBits.ViewChannel],
+    },
+    {
+      id: openerUser.id,
+      allow: [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ReadMessageHistory,
+        PermissionFlagsBits.AttachFiles,
+      ],
+    },
+  ];
+
+  if (guild.members.me) {
+    overwrites.push({
+      id: guild.members.me.id,
+      allow: [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ReadMessageHistory,
+        PermissionFlagsBits.ManageChannels,
+      ],
+    });
+  }
+
+  const staffRoles = guild.roles.cache.filter(
+    (r) =>
+      r.id !== guild.roles.everyone.id &&
+      !r.managed &&
+      (r.permissions.has(PermissionFlagsBits.Administrator) ||
+        r.permissions.has(PermissionFlagsBits.ManageGuild) ||
+        /owner|admin|staff|mod/i.test(r.name))
+  );
+
+  for (const [, role] of staffRoles) {
+    overwrites.push({
+      id: role.id,
+      allow: [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ReadMessageHistory,
+      ],
+    });
+  }
+
+  const ticketChannel = await guild.channels.create({
+    name: channelName,
+    type: ChannelType.GuildText,
+    parent: ticketCat?.id ?? null,
+    topic: `ticket_owner:${openerUser.id}`,
+    permissionOverwrites: overwrites,
+  });
+
+  const welcomeEmbed = new EmbedBuilder()
+    .setTitle('🎟️ Ticket Deschis — Comandă / Cumpărare')
+    .setDescription(
+      `Salut <@${openerUser.id}>! Scrie aici ce vrei să cumperi și detaliile necesare.\nUn administrator / vânzător te va contacta în acest canal.\n\nCând ați terminat, apasă **Închide Ticket** ca să primești în PV tot ce s-a vorbit.`
+    )
+    .setColor('#5865F2')
+    .setTimestamp();
+
+  const closeRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(TICKET_CLOSE_BTN_ID)
+      .setLabel('Închide Ticket')
+      .setEmoji('🔒')
+      .setStyle(ButtonStyle.Danger)
+  );
+
+  await ticketChannel.send({
+    content: `<@${openerUser.id}>`,
+    embeds: [welcomeEmbed],
+    components: [closeRow],
+  });
+
+  return ticketChannel;
+}
+
+async function buildChannelTranscriptText(channel, guild, closedByUser) {
+  const collected = [];
+  let lastId = null;
+
+  for (let page = 0; page < 10; page++) {
+    const batch = await channel.messages
+      .fetch({ limit: 100, ...(lastId ? { before: lastId } : {}) })
+      .catch(() => null);
+    if (!batch || batch.size === 0) break;
+
+    for (const [, msg] of batch) {
+      collected.push(msg);
+    }
+
+    lastId = batch.last()?.id ?? null;
+    if (batch.size < 100) break;
+  }
+
+  collected.reverse();
+
+  const lines = [
+    `TRANSCRIPT TICKET: #${channel.name}`,
+    `Server: ${guild.name} (${guild.id})`,
+    `Închis de: ${closedByUser.tag} (${closedByUser.id})`,
+    `Data închiderii: ${new Date().toISOString()}`,
+    `Total mesaje: ${collected.length}`,
+    '====================================================',
+    '',
+  ];
+
+  for (const msg of collected) {
+    const timeStr = msg.createdAt.toLocaleString('ro-RO', { timeZone: 'Europe/Bucharest' });
+    const authorTag = msg.author?.tag ?? 'Utilizator necunoscut';
+    const contentText = msg.content ? msg.content : '';
+    const embedTitles = (msg.embeds ?? [])
+      .map((e) => e.title || e.description)
+      .filter(Boolean)
+      .join(' | ');
+    const attachmentUrls = [...(msg.attachments?.values() ?? [])].map((a) => a.url);
+
+    let line = `[${timeStr}] ${authorTag}`;
+    if (contentText) line += `: ${contentText}`;
+    if (embedTitles) line += ` [Embed: ${embedTitles}]`;
+    if (attachmentUrls.length) line += ` [Atașamente: ${attachmentUrls.join(', ')}]`;
+    if (!contentText && !embedTitles && !attachmentUrls.length) line += ': [Mesaj fără text]';
+
+    lines.push(line);
+  }
+
+  return lines.join('\n');
+}
+
+async function handleTicketCloseButton(interaction, guild) {
+  const channel = interaction.channel;
+  if (!channel || channel.type !== ChannelType.GuildText) {
+    await interaction
+      .reply({ content: 'Această acțiune poate fi folosită doar într-un canal de ticket.', flags: MessageFlags.Ephemeral })
+      .catch(() => null);
+    return;
+  }
+
+  await interaction
+    .reply({
+      content: '🔒 Închid ticketul, trimit în PV tot ce s-a vorbit și salvez în log tickete...',
+      flags: MessageFlags.Ephemeral,
+    })
+    .catch(() => null);
+
+  const ownerMatch = /ticket_owner:(\d{15,22})/.exec(channel.topic ?? '');
+  const ticketOwnerId = ownerMatch?.[1] ?? null;
+
+  const transcriptText = await buildChannelTranscriptText(channel, guild, interaction.user);
+  const safeFileName = `${sanitizeChannelName(channel.name) || 'ticket'}-transcript.txt`;
+
+  const dmPayload = {
+    content: `📄 **Transcript ticket închis (\`#${channel.name}\`)** — mai jos ai tot ce s-a vorbit:`,
+    files: [new AttachmentBuilder(Buffer.from(transcriptText, 'utf8'), { name: safeFileName })],
+  };
+
+  if (ticketOwnerId) {
+    const ownerUser = await interaction.client.users.fetch(ticketOwnerId).catch(() => null);
+    if (ownerUser) {
+      await ownerUser.send(dmPayload).catch(() => null);
+    }
+  }
+
+  if (interaction.user.id !== ticketOwnerId) {
+    await interaction.user.send(dmPayload).catch(() => null);
+  }
+
+  const logChannel = findTicketLogChannel(guild);
+  if (logChannel && typeof logChannel.send === 'function') {
+    const logEmbed = new EmbedBuilder()
+      .setTitle('📋 Log Ticket Închis')
+      .setDescription(
+        [
+          `**Canal:** \`#${channel.name}\``,
+          `**Deschis de:** ${ticketOwnerId ? `<@${ticketOwnerId}> (\`${ticketOwnerId}\`)` : 'Necunoscut'}`,
+          `**Închis de:** <@${interaction.user.id}> (\`${interaction.user.tag}\`)`,
+        ].join('\n')
+      )
+      .setColor('#F59E0B')
+      .setTimestamp();
+
+    await logChannel
+      .send({
+        embeds: [logEmbed],
+        files: [new AttachmentBuilder(Buffer.from(transcriptText, 'utf8'), { name: safeFileName })],
+      })
+      .catch(() => null);
+  }
+
+  await new Promise((r) => setTimeout(r, 1500));
+  await channel.delete(`Ticket închis de ${interaction.user.tag}`).catch(() => null);
 }
 
 async function handleModerationCommand(interaction, guild, ephemeralOpts) {
@@ -669,7 +1024,11 @@ process.on('uncaughtException', (err) => {
 });
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds],
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+  ],
 });
 
 client.on(Events.Error, (err) => {
@@ -685,11 +1044,46 @@ client.once(Events.ClientReady, async (readyClient) => {
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
-  if (!interaction.isChatInputCommand() || !interaction.guild) return;
-  const { commandName, guild } = interaction;
+  if (!interaction.guild) return;
+  const guild = interaction.guild;
   const ephemeralOpts = { flags: MessageFlags.Ephemeral };
 
   try {
+    if (interaction.isButton()) {
+      if (interaction.customId === TICKET_OPEN_BTN_ID) {
+        const existingChannel = guild.channels.cache.find(
+          (c) => c.type === ChannelType.GuildText && String(c.topic ?? '').includes(`ticket_owner:${interaction.user.id}`)
+        );
+
+        if (existingChannel) {
+          await interaction
+            .reply({
+              content: `Ai deja un ticket deschis aici: <#${existingChannel.id}>.`,
+              ...ephemeralOpts,
+            })
+            .catch(() => null);
+          return;
+        }
+
+        const ticketChannel = await createTicketChannel(guild, interaction.user);
+        await interaction
+          .reply({
+            content: `Ticketul tău a fost deschis: <#${ticketChannel.id}>.`,
+            ...ephemeralOpts,
+          })
+          .catch(() => null);
+        return;
+      }
+
+      if (interaction.customId === TICKET_CLOSE_BTN_ID) {
+        await handleTicketCloseButton(interaction, guild);
+        return;
+      }
+    }
+
+    if (!interaction.isChatInputCommand()) return;
+    const { commandName } = interaction;
+
     if (commandName === 'custom') {
       await interaction.deferReply(ephemeralOpts);
 
@@ -706,6 +1100,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
         .editReply(
           `Gata! Am generat cu AI **${plan.title}**.\n**Roluri create:** ${rolesList}\n${catsList}`
         )
+        .catch(() => null);
+      return;
+    }
+
+    if (commandName === 'ticket-panel') {
+      const canal = interaction.options.getChannel('canal') ?? interaction.channel;
+      if (!canal || typeof canal.send !== 'function') {
+        await interaction
+          .reply({ content: 'Selectează un canal text valid.', ...ephemeralOpts })
+          .catch(() => null);
+        return;
+      }
+
+      await canal.send(buildTicketPanelMessage());
+      await interaction
+        .reply({ content: `Panoul de tickete a fost postat în <#${canal.id}>.`, ...ephemeralOpts })
         .catch(() => null);
       return;
     }
