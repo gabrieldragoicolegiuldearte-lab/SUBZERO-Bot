@@ -13,7 +13,6 @@ const {
 
 const DEFAULT_BASE_ROLE = 'Customer';
 
-// Canale unde pot scrie DOAR gradele mari (restul pot doar citi, dacă au acces)
 const READ_ONLY_FOR_MEMBERS = new Set([
   'reguli',
   'drop-uri',
@@ -176,6 +175,24 @@ const commands = [
         .setName('canal')
         .setDescription('Canalul unde se postează')
         .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
+    ),
+
+  new SlashCommandBuilder()
+    .setName('wipe')
+    .setDescription('Șterge canalele/categoriile și opțional rolurile de pe server')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addStringOption((o) =>
+      o
+        .setName('confirmare')
+        .setDescription('Scrie exact: STERGE TOT')
+        .setRequired(true)
+    )
+    .addStringOption((o) =>
+      o
+        .setName('sterge_roluri')
+        .setDescription('Vrei să șteargă și gradele/rolurile?')
+        .setRequired(true)
+        .addChoices({ name: 'Da', value: 'yes' }, { name: 'Nu', value: 'no' })
     ),
 ].map((c) => c.toJSON());
 
@@ -357,6 +374,54 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       await canal.send({ embeds: [embed] });
       return interaction.reply({ content: `Drop postat în <#${canal.id}>.`, ephemeral: true });
+    }
+
+    if (commandName === 'wipe') {
+      const confirmare = interaction.options.getString('confirmare', true);
+      const deleteRoles = interaction.options.getString('sterge_roluri', true) === 'yes';
+
+      if (confirmare !== 'STERGE TOT') {
+        return interaction.reply({
+          content: 'Anulat. Ca să confirmi ștergerea, scrie exact `STERGE TOT` la opțiunea `confirmare`.',
+          ephemeral: true,
+        });
+      }
+
+      await interaction.deferReply({ ephemeral: true });
+
+      const channels = await guild.channels.fetch();
+      let deletedChannels = 0;
+      for (const [, ch] of channels) {
+        if (!ch) continue;
+        const ok = await ch.delete('Wipe comandat de administrator').then(() => true).catch(() => false);
+        if (ok) deletedChannels++;
+      }
+
+      let deletedRoles = 0;
+      if (deleteRoles) {
+        const me = guild.members.me ?? (await guild.members.fetchMe().catch(() => null));
+        const roles = await guild.roles.fetch();
+        for (const [, role] of roles) {
+          if (!role) continue;
+          if (role.id === guild.roles.everyone.id) continue;
+          if (role.managed) continue;
+          if (me && role.position >= me.roles.highest.position) continue;
+
+          const ok = await role.delete('Wipe roluri comandat de administrator').then(() => true).catch(() => false);
+          if (ok) deletedRoles++;
+        }
+      }
+
+      await guild.channels.create({
+        name: 'general',
+        type: ChannelType.GuildText,
+      }).catch(() => null);
+
+      return interaction.editReply(
+        `Curățenie făcută: **${deletedChannels}** canale/categorii șterse` +
+          (deleteRoles ? ` și **${deletedRoles}** roluri șterse.` : `.`) +
+          ` Am creat un canal \`#general\` nou.`
+      );
     }
   } catch (err) {
     console.error(err);
