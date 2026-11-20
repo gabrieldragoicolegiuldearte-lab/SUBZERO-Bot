@@ -14,9 +14,8 @@ const {
 
 const GEMINI_MODELS = [
   'gemini-3.8-flash',
-  'gemini-3.7-flash',
-  'gemini-3.6-flash',
-  'gemini-3.1-flash-lite',
+  'gemma-4-31b-it',
+  'gemma-4-26b-a4b-it',
 ];
 
 function buildGeminiUrl(modelName, apiKey) {
@@ -307,7 +306,7 @@ async function fetchWithTimeout(url, options, timeoutMs = 30000) {
   }
 }
 
-async function callGeminiWithRetry(payload, maxRetries = 4) {
+async function callGeminiWithRetry(payload, maxRetries = 3) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error('Lipsește variabila GEMINI_API_KEY.');
@@ -333,20 +332,12 @@ async function callGeminiWithRetry(payload, maxRetries = 4) {
         lastStatus = 0;
         lastErrorText =
           fetchErr?.name === 'AbortError'
-            ? 'Timeout 30s la răspunsul Gemini'
+            ? 'Timeout 30s la răspunsul AI'
             : fetchErr?.message || String(fetchErr);
         if (attempt < maxRetries) {
           const waitMs = attempt * 2000;
           console.warn(
-            `Gemini (${modelName}) eroare rețea/timeout (încercarea ${attempt}/${maxRetries}). Reîncerc în ${waitMs / 1000}s...`
-          );
-          await new Promise((resolve) => setTimeout(resolve, waitMs));
-          continue;
-        }
-        break;
-      }
-
-      if (response.ok) {
+            `AI (${modelName}) eroare rețea/timeout (încercarea ${attempt}/${maxRetries}). Reîncerc în ${waitMs / 1000}s...` ); await new Promise((resolve) => setTimeout(resolve, waitMs)); continue; } break; }  if (response.ok) { console.log(`AI (${modelName}) a răspuns cu succes!`);
         return response.json();
       }
 
@@ -356,26 +347,27 @@ async function callGeminiWithRetry(payload, maxRetries = 4) {
       if (response.status === 503 && attempt < maxRetries) {
         const waitMs = attempt * 2000;
         console.warn(
-          `Gemini (${modelName}) 503 (încercarea ${attempt}/${maxRetries}). Reîncerc în ${waitMs / 1000}s...`
+          `AI (${modelName}) 503 (încercarea ${attempt}/${maxRetries}). Reîncerc în ${waitMs / 1000}s...`
         );
         await new Promise((resolve) => setTimeout(resolve, waitMs));
         continue;
       }
 
+      console.warn(`AI (${modelName}) a întors ${response.status}. Trec la următorul model...`);
       break;
     }
 
-    if (lastStatus !== 503 && lastStatus !== 404) {
+    if (lastStatus !== 503 && lastStatus !== 404 && lastStatus !== 429 && lastStatus !== 0) {
       break;
     }
   }
 
-  throw new Error(`Eroare Gemini API (${lastStatus}): ${lastErrorText.slice(0, 180)}`);
+  throw new Error(`Eroare AI API (${lastStatus}): ${lastErrorText.slice(0, 180)}`);
 }
 
 async function generateFullCustomPlanWithAI(promptText) {
-  const systemInstruction = `Ești un designer profesionist de servere Discord. Primești o cerere în limba română și creezi o structură COMPLET personalizată, adaptată exact tematicii cerute (fără șabloane fixe de resell dacă tema este alta, ex: trotinete electrice și meet & greet).
-Întoarce DOAR JSON valid (fără markdown, fără text suplimentar).
+  const fullPrompt = `Ești un designer profesionist de servere Discord. Primești o cerere în limba română și creezi o structură COMPLET personalizată, adaptată exact tematicii cerute (fără șabloane fixe de resell dacă tema este alta, ex: trotinete electrice și meet & greet).
+Întoarce DOAR JSON valid (fără markdown, fără \`\`\`json, fără text suplimentar).
 
 Format exact:
 {
@@ -427,34 +419,37 @@ Reguli:
 - Fiecare categorie să aibă între 2 și 7 canale relevante.
 - Numele canalelor: litere mici, cifre, cratimă (fără spații/diacritice). Pentru canalele vocale folosește "type": "voice".
 - Setează "readOnlyForMembers": true pe canalele unde scriu doar gradele superioare / organizatorii / rolurile speciale ("allowedWriters"), iar restul pot doar citi.
-- Marchează cu "private": true doar categoriile interne de staff / organizare, cu "allowRoles" setat.`;
+- Marchează cu "private": true doar categoriile interne de staff / organizare, cu "allowRoles" setat.
+
+Cerere server: ${promptText}`;
 
   const data = await callGeminiWithRetry({
-    systemInstruction: {
-      parts: [{ text: systemInstruction }],
-    },
     contents: [
       {
         role: 'user',
-        parts: [{ text: `Cerere server: ${promptText}` }],
+        parts: [{ text: fullPrompt }],
       },
     ],
     generationConfig: {
       temperature: 0.75,
-      responseMimeType: 'application/json',
     },
   });
 
   const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!rawText) {
-    throw new Error('Răspuns gol de la Gemini.');
+    throw new Error('Răspuns gol de la AI.');
   }
 
-  const cleaned = rawText
-    .trim()
-    .replace(/^```json\s*/i, '')
-    .replace(/^```\s*/i, '')
-    .replace(/\s*```$/i, '');
+  const jsonStart = rawText.indexOf('{');
+  const jsonEnd = rawText.lastIndexOf('}');
+  const cleaned =
+    jsonStart !== -1 && jsonEnd !== -1 && jsonEnd > jsonStart
+      ? rawText.slice(jsonStart, jsonEnd + 1)
+      : rawText
+          .trim()
+          .replace(/^```json\s*/i, '')
+          .replace(/^```\s*/i, '')
+          .replace(/\s*```$/i, '');
 
   const parsed = JSON.parse(cleaned);
 
@@ -553,31 +548,6 @@ async function applyServerStructure(guild, structure) {
   return createdRoles;
 }
 
-async function checkGeminiConnection() {
-  try {
-    const data = await callGeminiWithRetry({
-      contents: [
-        {
-          role: 'user',
-          parts: [{ text: 'Răspunde cu un singur cuvânt: OK' }],
-        },
-      ],
-      generationConfig: {
-        maxOutputTokens: 10,
-      },
-    });
-
-    const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-    if (reply) {
-      console.log('Gemini conectat!');
-    } else {
-      console.warn('Gemini NECONECTAT: răspuns gol de la API.');
-    }
-  } catch (err) {
-    console.error('Gemini NECONECTAT:', err?.message || err);
-  }
-}
-
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
 });
@@ -588,8 +558,6 @@ client.once(Events.ClientReady, async (readyClient) => {
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
   await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: commands });
   console.log('Comenzile au fost încărcate.');
-
-  await checkGeminiConnection();
 });
 
 client.on(Events.GuildMemberAdd, async (member) => {
