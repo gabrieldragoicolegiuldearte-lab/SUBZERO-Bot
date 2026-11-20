@@ -11,111 +11,143 @@ const {
   EmbedBuilder,
 } = require('discord.js');
 
-const DEFAULT_BASE_ROLE = 'Customer';
-
-const READ_ONLY_FOR_MEMBERS = new Set([
-  'reguli',
-  'drop-uri',
-  'drop-tech',
-  'stoc-conturi',
-  'preturi-stoc',
-  'anunturi-drop',
-  'stoc-preturi',
-]);
-
 const RESELL_VARIANTS = {
   'sneakers-streetwear': {
     label: 'Sneakers & Streetwear',
-    writers: ['Owner / Admin', 'Staff', 'Reseller'],
     roles: [
-      { name: 'Owner / Admin', color: '#FF3B30', hoist: true },
-      { name: 'Staff', color: '#F59E0B', hoist: true },
-      { name: 'Reseller', color: '#5865F2', hoist: true },
-      { name: 'Verified Buyer', color: '#10B981', hoist: false },
-      { name: 'Customer', color: '#94A3B8', hoist: false },
+      { name: 'Owner / Admin', color: '#FF3B30', hoist: true, staffOrMod: true },
+      { name: 'Staff', color: '#F59E0B', hoist: true, staffOrMod: true },
+      { name: 'Reseller', color: '#5865F2', hoist: true, staffOrMod: false },
+      { name: 'Verified Buyer', color: '#10B981', hoist: false, staffOrMod: false },
+      { name: 'Customer', color: '#94A3B8', hoist: false, staffOrMod: false },
     ],
     cats: [
       {
         name: '📦 SNEAKERS & STREETWEAR',
-        channels: ['reguli', 'drop-uri', 'legit-check', 'wtb-wts', 'vc-resell'],
+        private: false,
+        allowRoles: [],
+        channels: [
+          { name: 'reguli', type: 'text', readOnlyForMembers: true, allowedWriters: ['Owner / Admin', 'Staff'] },
+          { name: 'drop-uri', type: 'text', readOnlyForMembers: true, allowedWriters: ['Owner / Admin', 'Staff', 'Reseller'] },
+          { name: 'legit-check', type: 'text', readOnlyForMembers: false, allowedWriters: [] },
+          { name: 'wtb-wts', type: 'text', readOnlyForMembers: false, allowedWriters: [] },
+          { name: 'vc-resell', type: 'voice', readOnlyForMembers: false, allowedWriters: [] },
+        ],
       },
       {
         name: '🔒 STAFF & COMENZI',
         private: true,
         allowRoles: ['Owner / Admin', 'Staff'],
-        channels: ['comenzi-active', 'vouch-logs', 'staff-chat'],
+        channels: [
+          { name: 'comenzi-active', type: 'text', readOnlyForMembers: false, allowedWriters: [] },
+          { name: 'vouch-logs', type: 'text', readOnlyForMembers: false, allowedWriters: [] },
+          { name: 'staff-chat', type: 'text', readOnlyForMembers: false, allowedWriters: [] },
+        ],
       },
     ],
   },
 
   'electronics-tech': {
     label: 'Electronics & Tech',
-    writers: ['Owner / Admin', 'Staff', 'Tech Reseller'],
     roles: [
-      { name: 'Owner / Admin', color: '#FF3B30', hoist: true },
-      { name: 'Staff', color: '#F59E0B', hoist: true },
-      { name: 'Tech Reseller', color: '#06B6D4', hoist: true },
-      { name: 'Verified Buyer', color: '#10B981', hoist: false },
-      { name: 'Customer', color: '#94A3B8', hoist: false },
+      { name: 'Owner / Admin', color: '#FF3B30', hoist: true, staffOrMod: true },
+      { name: 'Staff', color: '#F59E0B', hoist: true, staffOrMod: true },
+      { name: 'Tech Reseller', color: '#06B6D4', hoist: true, staffOrMod: false },
+      { name: 'Verified Buyer', color: '#10B981', hoist: false, staffOrMod: false },
+      { name: 'Customer', color: '#94A3B8', hoist: false, staffOrMod: false },
     ],
     cats: [
       {
         name: '💻 ELECTRONICS & TECH',
-        channels: ['reguli', 'drop-tech', 'legit-check', 'preturi-stoc', 'support-comenzi'],
+        private: false,
+        allowRoles: [],
+        channels: [
+          { name: 'reguli', type: 'text', readOnlyForMembers: true, allowedWriters: ['Owner / Admin', 'Staff'] },
+          { name: 'drop-tech', type: 'text', readOnlyForMembers: true, allowedWriters: ['Owner / Admin', 'Staff', 'Tech Reseller'] },
+          { name: 'legit-check', type: 'text', readOnlyForMembers: false, allowedWriters: [] },
+          { name: 'preturi-stoc', type: 'text', readOnlyForMembers: true, allowedWriters: ['Owner / Admin', 'Staff', 'Tech Reseller'] },
+          { name: 'support-comenzi', type: 'text', readOnlyForMembers: false, allowedWriters: [] },
+        ],
       },
       {
         name: '🔒 STAFF & WARRANTY',
         private: true,
         allowRoles: ['Owner / Admin', 'Staff'],
-        channels: ['facturi-stoc', 'logs-tech', 'staff-chat'],
+        channels: [
+          { name: 'facturi-stoc', type: 'text', readOnlyForMembers: false, allowedWriters: [] },
+          { name: 'logs-tech', type: 'text', readOnlyForMembers: false, allowedWriters: [] },
+          { name: 'staff-chat', type: 'text', readOnlyForMembers: false, allowedWriters: [] },
+        ],
       },
     ],
   },
 
   'accounts-digital': {
     label: 'Accounts & Digital',
-    writers: ['Owner / Admin', 'Staff', 'Supplier'],
     roles: [
-      { name: 'Owner / Admin', color: '#FF3B30', hoist: true },
-      { name: 'Staff', color: '#F59E0B', hoist: true },
-      { name: 'Supplier', color: '#A855F7', hoist: true },
-      { name: 'Verified Buyer', color: '#10B981', hoist: false },
-      { name: 'Customer', color: '#94A3B8', hoist: false },
+      { name: 'Owner / Admin', color: '#FF3B30', hoist: true, staffOrMod: true },
+      { name: 'Staff', color: '#F59E0B', hoist: true, staffOrMod: true },
+      { name: 'Supplier', color: '#A855F7', hoist: true, staffOrMod: false },
+      { name: 'Verified Buyer', color: '#10B981', hoist: false, staffOrMod: false },
+      { name: 'Customer', color: '#94A3B8', hoist: false, staffOrMod: false },
     ],
     cats: [
       {
         name: '🔑 ACCOUNTS & DIGITAL',
-        channels: ['reguli', 'stoc-conturi', 'vouch-feedback', 'tickete-comenzi'],
+        private: false,
+        allowRoles: [],
+        channels: [
+          { name: 'reguli', type: 'text', readOnlyForMembers: true, allowedWriters: ['Owner / Admin', 'Staff'] },
+          { name: 'stoc-conturi', type: 'text', readOnlyForMembers: true, allowedWriters: ['Owner / Admin', 'Staff', 'Supplier'] },
+          { name: 'vouch-feedback', type: 'text', readOnlyForMembers: false, allowedWriters: [] },
+          { name: 'tickete-comenzi', type: 'text', readOnlyForMembers: false, allowedWriters: [] },
+        ],
       },
       {
         name: '🔒 STAFF & DELIVERY',
         private: true,
         allowRoles: ['Owner / Admin', 'Staff'],
-        channels: ['livrari', 'logs-digital', 'staff-chat'],
+        channels: [
+          { name: 'livrari', type: 'text', readOnlyForMembers: false, allowedWriters: [] },
+          { name: 'logs-digital', type: 'text', readOnlyForMembers: false, allowedWriters: [] },
+          { name: 'staff-chat', type: 'text', readOnlyForMembers: false, allowedWriters: [] },
+        ],
       },
     ],
   },
 
   'full-resell': {
     label: 'Full Resell Hub',
-    writers: ['Owner / Admin', 'Staff', 'Reseller'],
     roles: [
-      { name: 'Owner / Admin', color: '#FF3B30', hoist: true },
-      { name: 'Staff', color: '#F59E0B', hoist: true },
-      { name: 'Reseller', color: '#5865F2', hoist: true },
-      { name: 'Verified Buyer', color: '#22C55E', hoist: false },
-      { name: 'Customer', color: '#94A3B8', hoist: false },
+      { name: 'Owner / Admin', color: '#FF3B30', hoist: true, staffOrMod: true },
+      { name: 'Staff', color: '#F59E0B', hoist: true, staffOrMod: true },
+      { name: 'Reseller', color: '#5865F2', hoist: true, staffOrMod: false },
+      { name: 'Verified Buyer', color: '#22C55E', hoist: false, staffOrMod: false },
+      { name: 'Customer', color: '#94A3B8', hoist: false, staffOrMod: false },
     ],
     cats: [
       {
         name: '📌 INFO & RESELL',
-        channels: ['reguli', 'anunturi-drop', 'legit-check', 'wtb-wts', 'stoc-preturi', 'vc-resell'],
+        private: false,
+        allowRoles: [],
+        channels: [
+          { name: 'reguli', type: 'text', readOnlyForMembers: true, allowedWriters: ['Owner / Admin', 'Staff'] },
+          { name: 'anunturi-drop', type: 'text', readOnlyForMembers: true, allowedWriters: ['Owner / Admin', 'Staff', 'Reseller'] },
+          { name: 'legit-check', type: 'text', readOnlyForMembers: false, allowedWriters: [] },
+          { name: 'wtb-wts', type: 'text', readOnlyForMembers: false, allowedWriters: [] },
+          { name: 'stoc-preturi', type: 'text', readOnlyForMembers: true, allowedWriters: ['Owner / Admin', 'Staff', 'Reseller'] },
+          { name: 'vc-resell', type: 'voice', readOnlyForMembers: false, allowedWriters: [] },
+        ],
       },
       {
         name: '🔒 STAFF & COMENZI',
         private: true,
         allowRoles: ['Owner / Admin', 'Staff'],
-        channels: ['comenzi', 'vouch-logs', 'staff-chat'],
+        channels: [
+          { name: 'comenzi', type: 'text', readOnlyForMembers: false, allowedWriters: [] },
+          { name: 'vouch-logs', type: 'text', readOnlyForMembers: false, allowedWriters: [] },
+          { name: 'staff-chat', type: 'text', readOnlyForMembers: false, allowedWriters: [] },
+        ],
       },
     ],
   },
@@ -140,6 +172,17 @@ const commands = [
     )
     .addStringOption((o) =>
       o.setName('extra').setDescription('Canale în plus, separate prin virgulă')
+    ),
+
+  new SlashCommandBuilder()
+    .setName('custom')
+    .setDescription('Generează 100% custom cu AI roluri, categorii, canale și permisiuni')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addStringOption((o) =>
+      o
+        .setName('descriere')
+        .setDescription('Descrie detaliat ce server vrei (ex: trotinete electrice și meet & greet)')
+        .setRequired(true)
     ),
 
   new SlashCommandBuilder()
@@ -201,17 +244,23 @@ const client = new Client({
 });
 
 function sanitizeChannelName(raw) {
-  return raw
+  return String(raw || '')
     .trim()
     .toLowerCase()
     .replace(/\s+/g, '-')
-    .replace(/[^a-z0-9-_]/g, '');
+    .replace(/[^a-z0-9-_]/g, '')
+    .slice(0, 95);
 }
 
-function buildChannelOverwrites(guild, chName, variant, createdRoles, isPrivateCat) {
-  if (isPrivateCat) return [];
+function sanitizeHexColor(raw, fallback = '#5865F2') {
+  if (typeof raw === 'string' && /^#[0-9A-Fa-f]{6}$/.test(raw.trim())) {
+    return raw.trim();
+  }
+  return fallback;
+}
 
-  if (!READ_ONLY_FOR_MEMBERS.has(chName)) {
+function buildChannelOverwrites(guild, ch, createdRoles, isPrivateCat) {
+  if (isPrivateCat || ch.type === 'voice' || !ch.readOnlyForMembers) {
     return [];
   }
 
@@ -222,7 +271,7 @@ function buildChannelOverwrites(guild, chName, variant, createdRoles, isPrivateC
     },
   ];
 
-  for (const roleName of variant.writers || []) {
+  for (const roleName of ch.allowedWriters || []) {
     const roleObj = createdRoles.get(roleName);
     if (roleObj) {
       overwrites.push({
@@ -235,6 +284,204 @@ function buildChannelOverwrites(guild, chName, variant, createdRoles, isPrivateC
   return overwrites;
 }
 
+async function generateFullCustomPlanWithAI(promptText) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error('Lipsește variabila GEMINI_API_KEY.');
+  }
+
+  const systemInstruction = `Ești un designer profesionist de servere Discord. Primești o cerere în limba română și creezi o structură COMPLET personalizată, adaptată exact tematicii cerute (fără șabloane fixe de resell dacă tema este alta, ex: trotinete electrice și meet & greet).
+Întoarce DOAR JSON valid (fără markdown, fără text suplimentar).
+
+Format exact:
+{
+  "title": "Titlu scurt și clar",
+  "baseRoleName": "Numele rolului de bază pentru membri noi (ex: Rider / Membru)",
+  "roles": [
+    { "name": "Fondator / Admin", "color": "#FF3B30", "hoist": true, "staffOrMod": true },
+    { "name": "Organizator Meet", "color": "#F59E0B", "hoist": true, "staffOrMod": true },
+    { "name": "Pro Rider", "color": "#3B82F6", "hoist": true, "staffOrMod": false },
+    { "name": "Rider / Membru", "color": "#94A3B8", "hoist": false, "staffOrMod": false }
+  ],
+  "cats": [
+    {
+      "name": "🛴 INFO & MEET & GREET",
+      "private": false,
+      "allowRoles": [],
+      "channels": [
+        {
+          "name": "reguli",
+          "type": "text",
+          "readOnlyForMembers": true,
+          "allowedWriters": ["Fondator / Admin", "Organizator Meet"]
+        },
+        {
+          "name": "anunturi-meetgreet",
+          "type": "text",
+          "readOnlyForMembers": true,
+          "allowedWriters": ["Fondator / Admin", "Organizator Meet"]
+        },
+        {
+          "name": "discutii-trotinete",
+          "type": "text",
+          "readOnlyForMembers": false,
+          "allowedWriters": []
+        },
+        {
+          "name": "vc-meetgreet",
+          "type": "voice",
+          "readOnlyForMembers": false,
+          "allowedWriters": []
+        }
+      ]
+    }
+  ]
+}
+
+Reguli:
+- Creează 3 până la 6 categorii bogate și bine organizate, relevante exact pentru cerere.
+- Fiecare categorie să aibă între 2 și 7 canale relevante.
+- Numele canalelor: litere mici, cifre, cratimă (fără spații/diacritice). Pentru canalele vocale folosește "type": "voice".
+- Setează "readOnlyForMembers": true pe canalele unde scriu doar gradele superioare / organizatorii / rolurile speciale ("allowedWriters"), iar restul pot doar citi.
+- Marchează cu "private": true doar categoriile interne de staff / organizare, cu "allowRoles" setat.`;
+
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(
+      apiKey
+    )}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        systemInstruction: {
+          parts: [{ text: systemInstruction }],
+        },
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: `Cerere server: ${promptText}` }],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.75,
+          responseMimeType: 'application/json',
+        },
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => '');
+    throw new Error(`Eroare Gemini API (${response.status}): ${errText.slice(0, 200)}`);
+  }
+
+  const data = await response.json();
+  const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!rawText) {
+    throw new Error('Răspuns gol de la Gemini.');
+  }
+
+  const cleaned = rawText
+    .trim()
+    .replace(/^```json\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/\s*```$/i, '');
+
+  const parsed = JSON.parse(cleaned);
+
+  const roles = Array.isArray(parsed.roles) && parsed.roles.length
+    ? parsed.roles.slice(0, 10).map((r, idx) => ({
+        name: String(r.name || `Grad ${idx + 1}`).slice(0, 60),
+        color: sanitizeHexColor(r.color),
+        hoist: Boolean(r.hoist),
+        staffOrMod: Boolean(r.staffOrMod),
+      }))
+    : RESELL_VARIANTS['full-resell'].roles;
+
+  const cats = Array.isArray(parsed.cats) && parsed.cats.length
+    ? parsed.cats.slice(0, 7).map((c, idx) => ({
+        name: String(c.name || `📁 CATEGORIE ${idx + 1}`).slice(0, 80),
+        private: Boolean(c.private),
+        allowRoles: Array.isArray(c.allowRoles) ? c.allowRoles.map(String) : [],
+        channels: Array.isArray(c.channels)
+          ? c.channels
+              .map((ch) => ({
+                name: sanitizeChannelName(typeof ch === 'string' ? ch : ch?.name),
+                type: ch?.type === 'voice' || String(ch?.name || '').startsWith('vc-') ? 'voice' : 'text',
+                readOnlyForMembers: Boolean(ch?.readOnlyForMembers),
+                allowedWriters: Array.isArray(ch?.allowedWriters) ? ch.allowedWriters.map(String) : [],
+              }))
+              .filter((ch) => Boolean(ch.name))
+              .slice(0, 12)
+          : [],
+      }))
+    : RESELL_VARIANTS['full-resell'].cats;
+
+  return {
+    title: String(parsed.title || 'Server Personalizat AI').slice(0, 80),
+    baseRoleName: typeof parsed.baseRoleName === 'string' ? parsed.baseRoleName.slice(0, 60) : null,
+    roles,
+    cats,
+  };
+}
+
+async function applyServerStructure(guild, structure) {
+  const createdRoles = new Map();
+
+  for (const r of structure.roles) {
+    const existing = guild.roles.cache.find((role) => role.name === r.name);
+    const roleObj =
+      existing ||
+      (await guild.roles.create({
+        name: r.name,
+        color: r.color,
+        hoist: r.hoist,
+      }));
+    createdRoles.set(r.name, roleObj);
+  }
+
+  for (const cat of structure.cats) {
+    const overwrites = [];
+
+    if (cat.private) {
+      overwrites.push({
+        id: guild.roles.everyone.id,
+        deny: [PermissionFlagsBits.ViewChannel],
+      });
+
+      for (const roleName of cat.allowRoles || []) {
+        const roleObj = createdRoles.get(roleName);
+        if (roleObj) {
+          overwrites.push({
+            id: roleObj.id,
+            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages],
+          });
+        }
+      }
+    }
+
+    const category = await guild.channels.create({
+      name: cat.name,
+      type: ChannelType.GuildCategory,
+      permissionOverwrites: overwrites,
+    });
+
+    for (const ch of cat.channels) {
+      const isVoice = ch.type === 'voice';
+      const chOverwrites = buildChannelOverwrites(guild, ch, createdRoles, Boolean(cat.private));
+
+      await guild.channels.create({
+        name: ch.name,
+        type: isVoice ? ChannelType.GuildVoice : ChannelType.GuildText,
+        parent: category.id,
+        permissionOverwrites: chOverwrites,
+      });
+    }
+  }
+
+  return createdRoles;
+}
+
 client.once(Events.ClientReady, async (readyClient) => {
   console.log(`Bot online: ${readyClient.user.tag}`);
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -243,9 +490,11 @@ client.once(Events.ClientReady, async (readyClient) => {
 });
 
 client.on(Events.GuildMemberAdd, async (member) => {
-  const baseRole = member.guild.roles.cache.find((r) => r.name === DEFAULT_BASE_ROLE);
-  if (baseRole) {
-    await member.roles.add(baseRole).catch(() => null);
+  const candidateRole =
+    member.guild.roles.cache.find((r) => r.name === 'Customer') ||
+    member.guild.roles.cache.find((r) => /membru|member|rider/i.test(r.name));
+  if (candidateRole) {
+    await member.roles.add(candidateRole).catch(() => null);
   }
 });
 
@@ -264,59 +513,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
         .map(sanitizeChannelName)
         .filter(Boolean);
 
-      const createdRoles = new Map();
-      for (const r of variant.roles) {
-        const existing = guild.roles.cache.find((role) => role.name === r.name);
-        const roleObj =
-          existing ||
-          (await guild.roles.create({
-            name: r.name,
-            color: r.color,
-            hoist: r.hoist,
-          }));
-        createdRoles.set(r.name, roleObj);
-      }
-
-      for (const cat of variant.cats) {
-        const overwrites = [];
-
-        if (cat.private) {
-          overwrites.push({
-            id: guild.roles.everyone.id,
-            deny: [PermissionFlagsBits.ViewChannel],
-          });
-
-          for (const roleName of cat.allowRoles || []) {
-            const roleObj = createdRoles.get(roleName);
-            if (roleObj) {
-              overwrites.push({
-                id: roleObj.id,
-                allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages],
-              });
-            }
-          }
-        }
-
-        const category = await guild.channels.create({
-          name: cat.name,
-          type: ChannelType.GuildCategory,
-          permissionOverwrites: overwrites,
-        });
-
-        for (const ch of cat.channels) {
-          const isVoice = ch.startsWith('vc-');
-          const chOverwrites = isVoice
-            ? []
-            : buildChannelOverwrites(guild, ch, variant, createdRoles, Boolean(cat.private));
-
-          await guild.channels.create({
-            name: ch,
-            type: isVoice ? ChannelType.GuildVoice : ChannelType.GuildText,
-            parent: category.id,
-            permissionOverwrites: chOverwrites,
-          });
-        }
-      }
+      await applyServerStructure(guild, {
+        title: variant.label,
+        roles: variant.roles,
+        cats: variant.cats,
+      });
 
       if (extra.length) {
         const extraCat = await guild.channels.create({
@@ -334,6 +535,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       return interaction.editReply(
         `Gata! Am configurat varianta **${variant.label}**, gradele și permisiunile de scriere pe canale.`
+      );
+    }
+
+    if (commandName === 'custom') {
+      await interaction.deferReply({ ephemeral: true });
+
+      const descriere = interaction.options.getString('descriere', true);
+      const plan = await generateFullCustomPlanWithAI(descriere);
+      await applyServerStructure(guild, plan);
+
+      const rolesList = plan.roles.map((r) => `\`${r.name}\``).join(', ');
+      const catsList = plan.cats
+        .map((c) => `• **${c.name}** (${c.channels.length} canale${c.private ? ', privat' : ''})`)
+        .join('\n');
+
+      return interaction.editReply(
+        `Gata! Am generat cu AI **${plan.title}**.\n**Roluri create:** ${rolesList}\n${catsList}`
       );
     }
 
@@ -393,7 +611,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       let deletedChannels = 0;
       for (const [, ch] of channels) {
         if (!ch) continue;
-        const ok = await ch.delete('Wipe comandat de administrator').then(() => true).catch(() => false);
+        const ok = await ch
+          .delete('Wipe comandat de administrator')
+          .then(() => true)
+          .catch(() => false);
         if (ok) deletedChannels++;
       }
 
@@ -407,15 +628,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
           if (role.managed) continue;
           if (me && role.position >= me.roles.highest.position) continue;
 
-          const ok = await role.delete('Wipe roluri comandat de administrator').then(() => true).catch(() => false);
+          const ok = await role
+            .delete('Wipe roluri comandat de administrator')
+            .then(() => true)
+            .catch(() => false);
           if (ok) deletedRoles++;
         }
       }
 
-      await guild.channels.create({
-        name: 'general',
-        type: ChannelType.GuildText,
-      }).catch(() => null);
+      await guild.channels
+        .create({
+          name: 'general',
+          type: ChannelType.GuildText,
+        })
+        .catch(() => null);
 
       return interaction.editReply(
         `Curățenie făcută: **${deletedChannels}** canale/categorii șterse` +
@@ -426,7 +652,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
   } catch (err) {
     console.error(err);
     const msg =
-      'Eroare la rularea comenzii. Verifică dacă rolul botului este mai sus în listă și dacă are permisiunile necesare.';
+      err?.message?.includes('GEMINI_API_KEY')
+        ? 'Nu este setată variabila `GEMINI_API_KEY` în mediul botului / pe Pella.'
+        : 'Eroare la rularea comenzii. Verifică rolul botului, permisiunile și cheia `GEMINI_API_KEY`.';
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply({ content: msg }).catch(() => null);
     } else {
