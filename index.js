@@ -12,15 +12,12 @@ const {
   MessageFlags,
 } = require('discord.js');
 
-const GROQ_MODELS = [
-  'llama-3.3-70b-versatile',
-  'llama-3.1-8b-instant',
-];
-
 const GEMINI_MODELS = [
   'gemini-3.8-flash',
   'gemma-4-26b-a4b-it',
 ];
+
+let cachedGroqModels = null;
 
 function buildGeminiUrl(modelName, apiKey) {
   return (
@@ -310,12 +307,54 @@ async function fetchWithTimeout(url, options, timeoutMs = 25000) {
   }
 }
 
+async function resolveGroqModels(groqKey) {
+  if (Array.isArray(cachedGroqModels) && cachedGroqModels.length > 0) {
+    return cachedGroqModels;
+  }
+
+  const res = await fetchWithTimeout(
+    'https://api.groq.com/openai/v1/models',
+    {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${groqKey}`,
+      },
+    },
+    15000
+  );
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Groq /models ${res.status}:${errText.slice(0, 140)}`);
+  }
+
+  const json = await res.json();
+  const ids = Array.isArray(json?.data) ? json.data.map((m) => String(m?.id || '')).filter(Boolean) : [];
+
+  const preferred = ids.filter(
+    (id) =>
+      !/whisper|guard|prompt-guard|tts|audio|vision|embedding|safeguard/i.test(id) &&
+      (id.includes('llama') || id.includes('qwen') || id.includes('gemma') || id.includes('deepseek') || id.includes('mixtral'))
+  );
+
+  const candidates = preferred.length > 0 ? preferred.slice(0, 4) : ids.slice(0, 3);
+  if (candidates.length === 0) {
+    throw new Error('Nu s-a găsit niciun model Groq activ pe cheie.');
+  }
+
+  cachedGroqModels = candidates;
+  console.log('Modele Groq detectate automat:', candidates.join(', '));
+  return candidates;
+}
+
 async function callGroq(fullPrompt) {
   const groqKey = process.env.GROQ_API_KEY;
   if (!groqKey) return null;
 
+  const modelsToTry = await resolveGroqModels(groqKey);
   let lastError = '';
-  for (const modelName of GROQ_MODELS) {
+
+  for (const modelName of modelsToTry) {
     try {
       const response = await fetchWithTimeout(
         'https://api.groq.com/openai/v1/chat/completions',
@@ -328,7 +367,7 @@ async function callGroq(fullPrompt) {
         }
       } else {
         const errText = await response.text().catch(() => '');
-        lastError = `Groq (${modelName})${response.status}: ${errText.slice(0, 140)}`; console.warn(lastError); } } catch (err) { lastError = `Groq (${modelName}) eroare: ${err?.message || err}`; console.warn(lastError); } }  throw new Error(lastError || 'Groq nu a răspuns.'); }  async function callGeminiFallback(fullPrompt) { const apiKey = process.env.GEMINI_API_KEY; if (!apiKey) { throw new Error('Nu este setată nicio cheie validă (GROQ_API_KEY sau GEMINI_API_KEY).'); }  let lastStatus = 0; let lastErrorText = '';  for (const modelName of GEMINI_MODELS) { for (let attempt = 1; attempt <= 2; attempt++) { let response; try { response = await fetchWithTimeout( buildGeminiUrl(modelName, apiKey), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: fullPrompt }] }], generationConfig: { temperature: 0.75 }, }), }, 25000 ); } catch (fetchErr) { lastStatus = 0; lastErrorText = fetchErr?.message || String(fetchErr); if (attempt < 2) { await new Promise((r) => setTimeout(r, 2000)); continue; } break; }  if (response.ok) { const data = await response.json(); const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text; if (rawText) { console.log(`Gemini (${modelName}) a răspuns cu succes!`);
+        lastError = `Groq (${modelName})${response.status}: ${errText.slice(0, 140)}`; console.warn(lastError); } } catch (err) { lastError = `Groq (${modelName}) eroare: ${err?.message \vert{}\vert{} err}`; console.warn(lastError); } }  throw new Error(lastError \vert{}\vert{} 'Groq nu a răspuns.'); }  async function callGeminiFallback(fullPrompt) { const apiKey = process.env.GEMINI_API_KEY; if (!apiKey) { throw new Error('Nu este setată nicio cheie validă (GROQ_API_KEY sau GEMINI_API_KEY).'); }  let lastStatus = 0; let lastErrorText = '';  for (const modelName of GEMINI_MODELS) { for (let attempt = 1; attempt <= 2; attempt++) { let response; try { response = await fetchWithTimeout( buildGeminiUrl(modelName, apiKey), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: fullPrompt }] }], generationConfig: { temperature: 0.75 }, }), }, 25000 ); } catch (fetchErr) { lastStatus = 0; lastErrorText = fetchErr?.message \vert{}\vert{} String(fetchErr); if (attempt < 2) { await new Promise((r) => setTimeout(r, 2000)); continue; } break; }  if (response.ok) { const data = await response.json(); const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text; if (rawText) { console.log(`Gemini (${modelName}) a răspuns cu succes!`);
           return rawText;
         }
       }
@@ -405,17 +444,26 @@ Reguli:
 Cerere server: ${promptText}`;
 
   let rawText = null;
+  let groqErrMsg = '';
 
   if (process.env.GROQ_API_KEY) {
     try {
       rawText = await callGroq(fullPrompt);
     } catch (groqErr) {
-      console.warn('Groq a eșuat, trec pe rezerva Gemini:', groqErr?.message || groqErr);
+      groqErrMsg = groqErr?.message || String(groqErr);
+      console.warn('Groq a eșuat, trec pe rezerva Gemini:', groqErrMsg);
     }
   }
 
   if (!rawText) {
-    rawText = await callGeminiFallback(fullPrompt);
+    try {
+      rawText = await callGeminiFallback(fullPrompt);
+    } catch (gemErr) {
+      if (groqErrMsg) {
+        throw new Error(`Groq: ${groqErrMsg} | Gemini: ${gemErr?.message || gemErr}`);
+      }
+      throw gemErr;
+    }
   }
 
   const jsonStart = rawText.indexOf('{');
