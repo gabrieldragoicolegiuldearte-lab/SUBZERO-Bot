@@ -12,9 +12,13 @@ const {
   MessageFlags,
 } = require('discord.js');
 
+const GROQ_MODELS = [
+  'llama-3.3-70b-versatile',
+  'llama-3.1-8b-instant',
+];
+
 const GEMINI_MODELS = [
   'gemini-3.8-flash',
-  'gemma-4-31b-it',
   'gemma-4-26b-a4b-it',
 ];
 
@@ -296,7 +300,7 @@ function buildChannelOverwrites(guild, ch, createdRoles, isPrivateCat) {
   return overwrites;
 }
 
-async function fetchWithTimeout(url, options, timeoutMs = 30000) {
+async function fetchWithTimeout(url, options, timeoutMs = 25000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -306,63 +310,40 @@ async function fetchWithTimeout(url, options, timeoutMs = 30000) {
   }
 }
 
-async function callGeminiWithRetry(payload, maxRetries = 3) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error('Lipsește variabila GEMINI_API_KEY.');
-  }
+async function callGroq(fullPrompt) {
+  const groqKey = process.env.GROQ_API_KEY;
+  if (!groqKey) return null;
 
-  let lastErrorText = '';
-  let lastStatus = 0;
-
-  for (const modelName of GEMINI_MODELS) {
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      let response;
-      try {
-        response = await fetchWithTimeout(
-          buildGeminiUrl(modelName, apiKey),
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-          },
-          30000
-        );
-      } catch (fetchErr) {
-        lastStatus = 0;
-        lastErrorText =
-          fetchErr?.name === 'AbortError'
-            ? 'Timeout 30s la răspunsul AI'
-            : fetchErr?.message || String(fetchErr);
-        if (attempt < maxRetries) {
-          const waitMs = attempt * 2000;
-          console.warn(
-            `AI (${modelName}) eroare rețea/timeout (încercarea ${attempt}/${maxRetries}). Reîncerc în ${waitMs / 1000}s...` ); await new Promise((resolve) => setTimeout(resolve, waitMs)); continue; } break; }  if (response.ok) { console.log(`AI (${modelName}) a răspuns cu succes!`);
-        return response.json();
+  let lastError = '';
+  for (const modelName of GROQ_MODELS) {
+    try {
+      const response = await fetchWithTimeout(
+        'https://api.groq.com/openai/v1/chat/completions',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${groqKey}`, }, body: JSON.stringify({ model: modelName, messages: [{ role: 'user', content: fullPrompt }], temperature: 0.7, response_format: { type: 'json_object' }, }), }, 20000 );  if (response.ok) { const data = await response.json(); const text = data?.choices?.[0]?.message?.content; if (text) { console.log(`Groq (${modelName}) a răspuns cu succes!`);
+          return text;
+        }
+      } else {
+        const errText = await response.text().catch(() => '');
+        lastError = `Groq (${modelName})${response.status}: ${errText.slice(0, 140)}`; console.warn(lastError); } } catch (err) { lastError = `Groq (${modelName}) eroare: ${err?.message \vert{}\vert{} err}`; console.warn(lastError); } }  throw new Error(lastError \vert{}\vert{} 'Groq nu a răspuns.'); }  async function callGeminiFallback(fullPrompt) { const apiKey = process.env.GEMINI_API_KEY; if (!apiKey) { throw new Error('Nu este setată nicio cheie validă (GROQ_API_KEY sau GEMINI_API_KEY).'); }  let lastStatus = 0; let lastErrorText = '';  for (const modelName of GEMINI_MODELS) { for (let attempt = 1; attempt <= 2; attempt++) { let response; try { response = await fetchWithTimeout( buildGeminiUrl(modelName, apiKey), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: fullPrompt }] }], generationConfig: { temperature: 0.75 }, }), }, 25000 ); } catch (fetchErr) { lastStatus = 0; lastErrorText = fetchErr?.message \vert{}\vert{} String(fetchErr); if (attempt < 2) { await new Promise((r) => setTimeout(r, 2000)); continue; } break; }  if (response.ok) { const data = await response.json(); const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text; if (rawText) { console.log(`Gemini (${modelName}) a răspuns cu succes!`);
+          return rawText;
+        }
       }
 
       lastStatus = response.status;
       lastErrorText = await response.text().catch(() => '');
-
-      if (response.status === 503 && attempt < maxRetries) {
-        const waitMs = attempt * 2000;
-        console.warn(
-          `AI (${modelName}) 503 (încercarea ${attempt}/${maxRetries}). Reîncerc în ${waitMs / 1000}s...`
-        );
-        await new Promise((resolve) => setTimeout(resolve, waitMs));
+      if (response.status === 503 && attempt < 2) {
+        await new Promise((r) => setTimeout(r, 2000));
         continue;
       }
-
-      console.warn(`AI (${modelName}) a întors ${response.status}. Trec la următorul model...`);
-      break;
-    }
-
-    if (lastStatus !== 503 && lastStatus !== 404 && lastStatus !== 429 && lastStatus !== 0) {
       break;
     }
   }
 
-  throw new Error(`Eroare AI API (${lastStatus}): ${lastErrorText.slice(0, 180)}`);
+  throw new Error(`Eroare AI API (${lastStatus}): ${lastErrorText.slice(0, 160)}`);
 }
 
 async function generateFullCustomPlanWithAI(promptText) {
@@ -423,21 +404,18 @@ Reguli:
 
 Cerere server: ${promptText}`;
 
-  const data = await callGeminiWithRetry({
-    contents: [
-      {
-        role: 'user',
-        parts: [{ text: fullPrompt }],
-      },
-    ],
-    generationConfig: {
-      temperature: 0.75,
-    },
-  });
+  let rawText = null;
 
-  const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (process.env.GROQ_API_KEY) {
+    try {
+      rawText = await callGroq(fullPrompt);
+    } catch (groqErr) {
+      console.warn('Groq a eșuat, trec pe rezerva Gemini:', groqErr?.message || groqErr);
+    }
+  }
+
   if (!rawText) {
-    throw new Error('Răspuns gol de la AI.');
+    rawText = await callGeminiFallback(fullPrompt);
   }
 
   const jsonStart = rawText.indexOf('{');
