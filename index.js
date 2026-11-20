@@ -9,14 +9,16 @@ const {
   PermissionFlagsBits,
   Events,
   EmbedBuilder,
+  MessageFlags,
 } = require('discord.js');
 
-const GEMINI_MODEL = 'gemini-3.8-flash';
+const PRIMARY_GEMINI_MODEL = 'gemini-3.8-flash';
+const FALLBACK_GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-2.5-flash'];
 
-function buildGeminiUrl(apiKey) {
+function buildGeminiUrl(modelName, apiKey) {
   return (
     'https://generativelanguage.googleapis.com/v1beta/models/' +
-    GEMINI_MODEL +
+    modelName +
     ':generateContent?key=' +
     encodeURIComponent(apiKey)
   );
@@ -291,7 +293,17 @@ function buildChannelOverwrites(guild, ch, createdRoles, isPrivateCat) {
   return overwrites;
 }
 
-async function callGeminiWithRetry(payload, maxRetries = 3) {
+async function fetchWithTimeout(url, options, timeoutMs = 20000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function callGeminiWithRetry(payload, maxRetries = 4) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error('Lipsește variabila GEMINI_API_KEY.');
@@ -300,28 +312,51 @@ async function callGeminiWithRetry(payload, maxRetries = 3) {
   let lastErrorText = '';
   let lastStatus = 0;
 
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    const response = await fetch(buildGeminiUrl(apiKey), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
+  for (const modelName of FALLBACK_GEMINI_MODELS) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      let response;
+      try {
+        response = await fetchWithTimeout(
+          buildGeminiUrl(modelName, apiKey),
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          },
+          20000
+        );
+      } catch (fetchErr) {
+        lastStatus = 0;
+        lastErrorText = fetchErr?.name === 'AbortError' ? 'Timeout la răspunsul Gemini' : (fetchErr?.message || String(fetchErr));
+        if (attempt < maxRetries) {
+          const waitMs = attempt * 2000;
+          console.warn(`Gemini (${modelName}) eroare rețea/timeout (încercarea ${attempt}/${maxRetries}). Reîncerc în ${waitMs / 1000}s...`);
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
+          continue;
+        }
+        break;
+      }
 
-    if (response.ok) {
-      return response.json();
+      if (response.ok) {
+        return response.json();
+      }
+
+      lastStatus = response.status;
+      lastErrorText = await response.text().catch(() => '');
+
+      if (response.status === 503 && attempt < maxRetries) {
+        const waitMs = attempt * 2000;
+        console.warn(`Gemini (${modelName}) 503 (încercarea ${attempt}/${maxRetries}). Reîncerc în ${waitMs / 1000}s...`);
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+        continue;
+      }
+
+      break;
     }
 
-    lastStatus = response.status;
-    lastErrorText = await response.text().catch(() => '');
-
-    if (response.status === 503 && attempt < maxRetries) {
-      const waitMs = attempt * 2000;
-      console.warn(`Gemini 503 (încercarea ${attempt}/${maxRetries}). Reîncerc în ${waitMs / 1000}s...`);
-      await new Promise((resolve) => setTimeout(resolve, waitMs));
-      continue;
+    if (lastStatus !== 503 && lastStatus !== 404) {
+      break;
     }
-
-    break;
   }
 
   throw new Error(`Eroare Gemini API (${lastStatus}): ${lastErrorText.slice(0, 200)}`);
@@ -556,10 +591,11 @@ client.on(Events.GuildMemberAdd, async (member) => {
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand() || !interaction.guild) return;
   const { commandName, guild } = interaction;
+  const ephemeralOpts = { flags: MessageFlags.Ephemeral };
 
   try {
     if (commandName === 'setup') {
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply(ephemeralOpts);
 
       const variantKey = interaction.options.getString('varianta', true);
       const variant = RESELL_VARIANTS[variantKey];
@@ -594,7 +630,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (commandName === 'custom') {
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply(ephemeralOpts);
 
       const descriere = interaction.options.getString('descriere', true);
       const plan = await generateFullCustomPlanWithAI(descriere);
@@ -616,20 +652,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const actiune = interaction.options.getString('actiune', true);
 
       if (!member) {
-        return interaction.reply({ content: 'Nu am găsit membrul pe server.', ephemeral: true });
+        return interaction.reply({ content: 'Nu am găsit membrul pe server.', ...ephemeralOpts });
       }
 
       if (actiune === 'add') {
         await member.roles.add(role);
         return interaction.reply({
           content: `Am acordat gradul **${role.name}** lui <@${member.id}>.`,
-          ephemeral: true,
+          ...ephemeralOpts,
         });
       } else {
         await member.roles.remove(role);
         return interaction.reply({
           content: `Am scos gradul **${role.name}** de la <@${member.id}>.`,
-          ephemeral: true,
+          ...ephemeralOpts,
         });
       }
     }
@@ -646,7 +682,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         .setTimestamp();
 
       await canal.send({ embeds: [embed] });
-      return interaction.reply({ content: `Drop postat în <#${canal.id}>.`, ephemeral: true });
+      return interaction.reply({ content: `Drop postat în <#${canal.id}>.`, ...ephemeralOpts });
     }
 
     if (commandName === 'wipe') {
@@ -656,11 +692,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (confirmare !== 'STERGE TOT') {
         return interaction.reply({
           content: 'Anulat. Ca să confirmi ștergerea, scrie exact `STERGE TOT` la opțiunea `confirmare`.',
-          ephemeral: true,
+          ...ephemeralOpts,
         });
       }
 
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply(ephemeralOpts);
 
       const channels = await guild.channels.fetch();
       let deletedChannels = 0;
@@ -713,7 +749,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply({ content: msg }).catch(() => null);
     } else {
-      await interaction.reply({ content: msg, ephemeral: true }).catch(() => null);
+      await interaction.reply({ content: msg, ...ephemeralOpts }).catch(() => null);
     }
   }
 });
