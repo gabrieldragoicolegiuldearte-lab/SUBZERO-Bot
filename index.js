@@ -17,6 +17,24 @@ const GEMINI_MODELS = [
   'gemma-4-26b-a4b-it',
 ];
 
+const TIMEOUT_DURATIONS = {
+  '60s': { label: '60 secunde', ms: 60 * 1000 },
+  '5m': { label: '5 minute', ms: 5 * 60 * 1000 },
+  '10m': { label: '10 minute', ms: 10 * 60 * 1000 },
+  '1h': { label: '1 oră', ms: 60 * 60 * 1000 },
+  '1d': { label: '1 zi', ms: 24 * 60 * 60 * 1000 },
+  '7d': { label: '7 zile', ms: 7 * 24 * 60 * 60 * 1000 },
+  '28d': { label: '28 zile', ms: 28 * 24 * 60 * 60 * 1000 },
+};
+
+const BAN_DELETE_SECONDS = {
+  none: { label: 'Fără ștergere mesaje', seconds: 0 },
+  '1h': { label: 'Ultimele 1h', seconds: 3600 },
+  '6h': { label: 'Ultimele 6h', seconds: 21600 },
+  '24h': { label: 'Ultimele 24h', seconds: 86400 },
+  '7d': { label: 'Ultimele 7 zile', seconds: 604800 },
+};
+
 let cachedGroqModels = null;
 
 function buildGeminiUrl(modelName, apiKey) {
@@ -59,6 +77,59 @@ const commands = [
         .setName('descriere')
         .setDescription('Scrie-i botului exact ce să facă (orice tematică, roluri, canale, permisiuni, resell etc.)')
         .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName('mod')
+    .setDescription('Moderare completă: timeout, scoatere timeout, ban, unban și kick')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
+    .addStringOption((o) =>
+      o
+        .setName('actiune')
+        .setDescription('Alege acțiunea de moderare')
+        .setRequired(true)
+        .addChoices(
+          { name: 'Timeout', value: 'timeout' },
+          { name: 'Scoate Timeout', value: 'untimeout' },
+          { name: 'Ban', value: 'ban' },
+          { name: 'Unban (după ID)', value: 'unban' },
+          { name: 'Kick', value: 'kick' }
+        )
+    )
+    .addUserOption((o) =>
+      o.setName('membru').setDescription('Membrul vizat (pentru timeout / ban / kick)')
+    )
+    .addStringOption((o) =>
+      o.setName('user_id').setDescription('ID-ul utilizatorului (obligatoriu la unban, opțional la ban)')
+    )
+    .addStringOption((o) =>
+      o
+        .setName('durata')
+        .setDescription('Durata pentru timeout')
+        .addChoices(
+          { name: '60 secunde', value: '60s' },
+          { name: '5 minute', value: '5m' },
+          { name: '10 minute', value: '10m' },
+          { name: '1 oră', value: '1h' },
+          { name: '1 zi', value: '1d' },
+          { name: '7 zile', value: '7d' },
+          { name: '28 zile', value: '28d' }
+        )
+    )
+    .addStringOption((o) =>
+      o
+        .setName('sterge_mesaje')
+        .setDescription('Cât istoric de mesaje să șteargă la ban')
+        .addChoices(
+          { name: 'Fără ștergere mesaje', value: 'none' },
+          { name: 'Ultimele 1h', value: '1h' },
+          { name: 'Ultimele 6h', value: '6h' },
+          { name: 'Ultimele 24h', value: '24h' },
+          { name: 'Ultimele 7 zile', value: '7d' }
+        )
+    )
+    .addStringOption((o) =>
+      o.setName('motiv').setDescription('Motivul acțiunii (opțional)')
     ),
 
   new SlashCommandBuilder()
@@ -429,6 +500,166 @@ async function applyServerStructure(guild, structure) {
   return createdRoles;
 }
 
+async function handleModerationCommand(interaction, guild, ephemeralOpts) {
+  const actiune = interaction.options.getString('actiune', true);
+  const member = interaction.options.getMember('membru');
+  const userOption = interaction.options.getUser('membru');
+  const rawUserId = (interaction.options.getString('user_id') ?? '').trim();
+  const durataKey = interaction.options.getString('durata') ?? '10m';
+  const deleteMsgKey = interaction.options.getString('sterge_mesaje') ?? 'none';
+  const motiv = (interaction.options.getString('motiv') ?? 'Fără motiv specificat').slice(0, 400);
+
+  const me = guild.members.me ?? (await guild.members.fetchMe().catch(() => null));
+
+  if (actiune === 'timeout') {
+    if (!me || !me.permissions.has(PermissionFlagsBits.ModerateMembers)) {
+      await interaction
+        .reply({ content: 'Botul nu are permisiunea **Moderate Members**.', ...ephemeralOpts })
+        .catch(() => null);
+      return;
+    }
+    if (!member) {
+      await interaction
+        .reply({ content: 'Selectează un membru valid de pe server pentru timeout.', ...ephemeralOpts })
+        .catch(() => null);
+      return;
+    }
+    if (member.id === guild.ownerId || (me && member.roles.highest.position >= me.roles.highest.position)) {
+      await interaction
+        .reply({ content: 'Nu pot aplica timeout acestui membru (are grad egal sau mai mare decât botul).', ...ephemeralOpts })
+        .catch(() => null);
+      return;
+    }
+
+    const durInfo = TIMEOUT_DURATIONS[durataKey] ?? TIMEOUT_DURATIONS['10m'];
+    await member.timeout(durInfo.ms, motiv);
+    await interaction
+      .reply({
+        content: `Timeout aplicat lui <@${member.id}> pentru **${durInfo.label}**. Motiv: *${motiv}*.`,
+        ...ephemeralOpts,
+      })
+      .catch(() => null);
+    return;
+  }
+
+  if (actiune === 'untimeout') {
+    if (!me || !me.permissions.has(PermissionFlagsBits.ModerateMembers)) {
+      await interaction
+        .reply({ content: 'Botul nu are permisiunea **Moderate Members**.', ...ephemeralOpts })
+        .catch(() => null);
+      return;
+    }
+    if (!member) {
+      await interaction
+        .reply({ content: 'Selectează un membru valid de pe server pentru a scoate timeout-ul.', ...ephemeralOpts })
+        .catch(() => null);
+      return;
+    }
+
+    await member.timeout(null, motiv);
+    await interaction
+      .reply({
+        content: `Am scos timeout-ul de la <@${member.id}>. Motiv: *${motiv}*.`,
+        ...ephemeralOpts,
+      })
+      .catch(() => null);
+    return;
+  }
+
+  if (actiune === 'kick') {
+    if (!me || !me.permissions.has(PermissionFlagsBits.KickMembers)) {
+      await interaction
+        .reply({ content: 'Botul nu are permisiunea **Kick Members**.', ...ephemeralOpts })
+        .catch(() => null);
+      return;
+    }
+    if (!member) {
+      await interaction
+        .reply({ content: 'Selectează un membru valid de pe server pentru kick.', ...ephemeralOpts })
+        .catch(() => null);
+      return;
+    }
+    if (!member.kickable) {
+      await interaction
+        .reply({ content: 'Nu pot da kick acestui membru (verifică ierarhia rolurilor).', ...ephemeralOpts })
+        .catch(() => null);
+      return;
+    }
+
+    await member.kick(motiv);
+    await interaction
+      .reply({
+        content: `Membrul **${member.user.tag}** a primit kick. Motiv: *${motiv}*.`,
+        ...ephemeralOpts,
+      })
+      .catch(() => null);
+    return;
+  }
+
+  if (actiune === 'ban') {
+    if (!me || !me.permissions.has(PermissionFlagsBits.BanMembers)) {
+      await interaction
+        .reply({ content: 'Botul nu are permisiunea **Ban Members**.', ...ephemeralOpts })
+        .catch(() => null);
+      return;
+    }
+
+    const targetId = member?.id ?? userOption?.id ?? rawUserId;
+    if (!targetId) {
+      await interaction
+        .reply({ content: 'Specifică un `membru` sau un `user_id` pentru ban.', ...ephemeralOpts })
+        .catch(() => null);
+      return;
+    }
+
+    if (member && !member.bannable) {
+      await interaction
+        .reply({ content: 'Nu pot bana acest membru (verifică ierarhia rolurilor).', ...ephemeralOpts })
+        .catch(() => null);
+      return;
+    }
+
+    const delInfo = BAN_DELETE_SECONDS[deleteMsgKey] ?? BAN_DELETE_SECONDS.none;
+    await guild.members.ban(targetId, {
+      deleteMessageSeconds: delInfo.seconds,
+      reason: motiv,
+    });
+
+    await interaction
+      .reply({
+        content: `Utilizatorul \`${targetId}\` a fost banat (${delInfo.label}). Motiv: *${motiv}*.`,
+        ...ephemeralOpts,
+      })
+      .catch(() => null);
+    return;
+  }
+
+  if (actiune === 'unban') {
+    if (!me || !me.permissions.has(PermissionFlagsBits.BanMembers)) {
+      await interaction
+        .reply({ content: 'Botul nu are permisiunea **Ban Members**.', ...ephemeralOpts })
+        .catch(() => null);
+      return;
+    }
+
+    const targetId = rawUserId || userOption?.id || '';
+    if (!/^\d{15,22}$/.test(targetId)) {
+      await interaction
+        .reply({ content: 'Pentru **unban**, introdu un `user_id` numeric valid (ex. `123456789012345678`).', ...ephemeralOpts })
+        .catch(() => null);
+      return;
+    }
+
+    await guild.members.unban(targetId, motiv);
+    await interaction
+      .reply({
+        content: `Am scos ban-ul pentru utilizatorul \`${targetId}\`. Motiv: *${motiv}*.`,
+        ...ephemeralOpts,
+      })
+      .catch(() => null);
+  }
+}
+
 process.on('unhandledRejection', (reason) => {
   console.error('Unhandled Rejection:', reason);
 });
@@ -476,6 +707,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
           `Gata! Am generat cu AI **${plan.title}**.\n**Roluri create:** ${rolesList}\n${catsList}`
         )
         .catch(() => null);
+      return;
+    }
+
+    if (commandName === 'mod') {
+      await handleModerationCommand(interaction, guild, ephemeralOpts);
       return;
     }
 
