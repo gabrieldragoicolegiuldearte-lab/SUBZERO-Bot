@@ -11,7 +11,7 @@ const {
   EmbedBuilder,
 } = require('discord.js');
 
-const GEMINI_MODEL = 'gemini-2.5-flash';
+const GEMINI_MODEL = 'gemini-3.8-flash';
 
 function buildGeminiUrl(apiKey) {
   return (
