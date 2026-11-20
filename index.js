@@ -13,10 +13,21 @@ const {
 
 const DEFAULT_BASE_ROLE = 'Customer';
 
+// Canale unde pot scrie DOAR gradele mari (restul pot doar citi, dacă au acces)
+const READ_ONLY_FOR_MEMBERS = new Set([
+  'reguli',
+  'drop-uri',
+  'drop-tech',
+  'stoc-conturi',
+  'preturi-stoc',
+  'anunturi-drop',
+  'stoc-preturi',
+]);
+
 const RESELL_VARIANTS = {
   'sneakers-streetwear': {
     label: 'Sneakers & Streetwear',
-    color: '#5865F2',
+    writers: ['Owner / Admin', 'Staff', 'Reseller'],
     roles: [
       { name: 'Owner / Admin', color: '#FF3B30', hoist: true },
       { name: 'Staff', color: '#F59E0B', hoist: true },
@@ -40,7 +51,7 @@ const RESELL_VARIANTS = {
 
   'electronics-tech': {
     label: 'Electronics & Tech',
-    color: '#06B6D4',
+    writers: ['Owner / Admin', 'Staff', 'Tech Reseller'],
     roles: [
       { name: 'Owner / Admin', color: '#FF3B30', hoist: true },
       { name: 'Staff', color: '#F59E0B', hoist: true },
@@ -64,7 +75,7 @@ const RESELL_VARIANTS = {
 
   'accounts-digital': {
     label: 'Accounts & Digital',
-    color: '#A855F7',
+    writers: ['Owner / Admin', 'Staff', 'Supplier'],
     roles: [
       { name: 'Owner / Admin', color: '#FF3B30', hoist: true },
       { name: 'Staff', color: '#F59E0B', hoist: true },
@@ -88,7 +99,7 @@ const RESELL_VARIANTS = {
 
   'full-resell': {
     label: 'Full Resell Hub',
-    color: '#22C55E',
+    writers: ['Owner / Admin', 'Staff', 'Reseller'],
     roles: [
       { name: 'Owner / Admin', color: '#FF3B30', hoist: true },
       { name: 'Staff', color: '#F59E0B', hoist: true },
@@ -180,6 +191,33 @@ function sanitizeChannelName(raw) {
     .replace(/[^a-z0-9-_]/g, '');
 }
 
+function buildChannelOverwrites(guild, chName, variant, createdRoles, isPrivateCat) {
+  if (isPrivateCat) return [];
+
+  if (!READ_ONLY_FOR_MEMBERS.has(chName)) {
+    return [];
+  }
+
+  const overwrites = [
+    {
+      id: guild.roles.everyone.id,
+      deny: [PermissionFlagsBits.SendMessages],
+    },
+  ];
+
+  for (const roleName of variant.writers || []) {
+    const roleObj = createdRoles.get(roleName);
+    if (roleObj) {
+      overwrites.push({
+        id: roleObj.id,
+        allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages],
+      });
+    }
+  }
+
+  return overwrites;
+}
+
 client.once(Events.ClientReady, async (readyClient) => {
   console.log(`Bot online: ${readyClient.user.tag}`);
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -187,7 +225,6 @@ client.once(Events.ClientReady, async (readyClient) => {
   console.log('Comenzile Resell au fost înregistrate.');
 });
 
-// Dă automat gradul de bază la membrii noi
 client.on(Events.GuildMemberAdd, async (member) => {
   const baseRole = member.guild.roles.cache.find((r) => r.name === DEFAULT_BASE_ROLE);
   if (baseRole) {
@@ -250,10 +287,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
         });
 
         for (const ch of cat.channels) {
+          const isVoice = ch.startsWith('vc-');
+          const chOverwrites = isVoice
+            ? []
+            : buildChannelOverwrites(guild, ch, variant, createdRoles, Boolean(cat.private));
+
           await guild.channels.create({
             name: ch,
-            type: ch.startsWith('vc-') ? ChannelType.GuildVoice : ChannelType.GuildText,
+            type: isVoice ? ChannelType.GuildVoice : ChannelType.GuildText,
             parent: category.id,
+            permissionOverwrites: chOverwrites,
           });
         }
       }
@@ -273,7 +316,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
 
       return interaction.editReply(
-        `Gata! Am configurat varianta **${variant.label}**, am creat gradele și permisiunile automate.`
+        `Gata! Am configurat varianta **${variant.label}**, gradele și permisiunile de scriere pe canale.`
       );
     }
 
