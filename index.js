@@ -43,6 +43,10 @@ const TICKET_OPEN_BTN_ID = 'subzero_ticket_open_buy';
 const TICKET_CLAIM_BTN_ID = 'subzero_ticket_claim_staff';
 const TICKET_CLOSE_BTN_ID = 'subzero_ticket_close';
 
+const GUARD_INTERVAL_MS = 45000;
+const processedGuardMessageIds = new Set();
+const guardMonitors = new Map();
+
 let cachedGroqModels = null;
 
 function buildGeminiUrl(modelName, apiKey) {
@@ -77,6 +81,29 @@ const DEFAULT_FALLBACK_STRUCTURE = {
 };
 
 const commands = [
+  new SlashCommandBuilder()
+    .setName('start1')
+    .setDescription('Pornește sau rulează detecția AI în #general (timeout sau kick după decizia AI)')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
+    .addStringOption((o) =>
+      o
+        .setName('actiune')
+        .setDescription('Alege acțiunea pentru detecția AI')
+        .setRequired(true)
+        .addChoices(
+          { name: 'Pornește detecția automată', value: 'start' },
+          { name: 'Scanează acum', value: 'scan' },
+          { name: 'Oprește detecția automată', value: 'stop' },
+          { name: 'Vezi statusul', value: 'status' }
+        )
+    )
+    .addChannelOption((o) =>
+      o
+        .setName('canal')
+        .setDescription('Canalul monitorizat (implicit: general)')
+        .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
+    ),
+
   new SlashCommandBuilder()
     .setName('custom_server')
     .setDescription('Generează complet cu AI roluri, categorii, canale și permisiuni pentru server')
@@ -265,6 +292,18 @@ function normalizeLookupName(raw) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
+}
+
+function findGeneralChannel(guild, chosenChannel) {
+  if (chosenChannel && typeof chosenChannel.send === 'function') {
+    return chosenChannel;
+  }
+  const byName = guild.channels.cache.find(
+    (c) =>
+      (c.type === ChannelType.GuildText || c.type === ChannelType.GuildAnnouncement) &&
+      (c.name === 'general' || normalizeLookupName(c.name).includes('general'))
+  );
+  return byName ?? null;
 }
 
 function hasBlacklistTicketRole(member) {
@@ -628,6 +667,148 @@ async function runAIWithFallback(fullPrompt) {
           .replace(/\s*```$/i, '');
 
   return JSON.parse(cleaned);
+}
+
+async function evaluateChannelMessagesWithAI(messagesBatch, channelName) {
+  const formatted = messagesBatch.map((m) => ({
+    messageId: m.id,
+    authorId: m.author.id,
+    authorTag: m.author.tag,
+    content: m.content || '[fără text / atașament]',
+  }));
+
+  const fullPrompt = `Ești un moderator AI strict și echilibrat pentru un canal de chat Discord (#${channelName}).
+Analizează mesajele de mai jos și decide dacă există mesaje care nu sunt la locul lor (ex: spam, flood, limbaj vulgar/jigniri, promovare/linkuri suspecte, scam, trolling).
+Pentru fiecare mesaj nepotrivit, decide acțiunea:
+- "timeout" (pentru abateri moderate: limbaj vulgar, spam ușor, caps/flood, comportament deranjant) + alege "timeoutMinutes" între 1 și 60;
+- "kick" (pentru abateri grave: linkuri periculoase/scam, atacuri grave, spam masiv).
+Dacă un mesaj este normal / ok, nu îl include în "violations".
+
+Întoarce DOAR JSON valid (fără markdown, fără \`\`\`json, fără text suplimentar):
+{
+  "violations": [
+    {
+      "messageId": "id_mesaj",
+      "authorId": "id_autor",
+      "punishment": "timeout",
+      "timeoutMinutes": 10,
+      "reason": "Motiv scurt în română"
+    }
+  ]
+}
+
+Mesaje de analizat:
+${JSON.stringify(formatted)}`;
+
+  const parsed = await runAIWithFallback(fullPrompt);
+  return Array.isArray(parsed?.violations) ? parsed.violations : [];
+}
+
+async function scanChannelForViolations(guild, channel) {
+  if (!channel || !channel.messages || typeof channel.messages.fetch !== 'function') {
+    return { checked: 0, punished: 0, details: [] };
+  }
+
+  const fetched = await channel.messages.fetch({ limit: 15 }).catch(() => null);
+  if (!fetched || fetched.size === 0) {
+    return { checked: 0, punished: 0, details: [] };
+  }
+
+  const candidates = [...fetched.values()]
+    .reverse()
+    .filter((m) => m.author && !m.author.bot && !processedGuardMessageIds.has(m.id));
+
+  if (candidates.length === 0) {
+    return { checked: 0, punished: 0, details: [] };
+  }
+
+  for (const m of candidates) {
+    processedGuardMessageIds.add(m.id);
+    if (processedGuardMessageIds.size > 2000) {
+      const firstKey = processedGuardMessageIds.values().next().value;
+      processedGuardMessageIds.delete(firstKey);
+    }
+  }
+
+  const violations = await evaluateChannelMessagesWithAI(candidates, channel.name);
+  if (violations.length === 0) {
+    return { checked: candidates.length, punished: 0, details: [] };
+  }
+
+  const me = guild.members.me ?? (await guild.members.fetchMe().catch(() => null));
+  const byId = new Map(candidates.map((m) => [m.id, m]));
+  const details = [];
+  let punished = 0;
+
+  for (const v of violations) {
+    const msg = byId.get(String(v?.messageId ?? ''));
+    const targetId = String(v?.authorId ?? msg?.author?.id ?? '').trim();
+    if (!targetId || targetId === guild.ownerId || (me && targetId === me.id)) {
+      continue;
+    }
+
+    const member =
+      msg?.member ?? (await guild.members.fetch(targetId).catch(() => null));
+    if (!member) continue;
+    if (me && member.roles.highest.position >= me.roles.highest.position) {
+      continue;
+    }
+
+    const decision = String(v?.punishment ?? '').toLowerCase().trim();
+    const reason = String(v?.reason ?? 'Mesaj nepotrivit detectat de AI').slice(0, 350);
+
+    if (decision === 'kick' && me?.permissions.has(PermissionFlagsBits.KickMembers) && member.kickable) {
+      await member.kick(`[AI /start1] ${reason}`).catch(() => null);
+      punished++;
+      details.push(`🥾 **KICK** -> <@${member.id}> (${reason})`);
+      await channel
+        .send({ content: `🤖 AI a detectat o abatere gravă și a dat **kick** lui <@${member.id}>. Motiv: *${reason}*.` })
+        .catch(() => null);
+    } else if (me?.permissions.has(PermissionFlagsBits.ModerateMembers)) {
+      const rawMins = Number(v?.timeoutMinutes);
+      const safeMins = Number.isFinite(rawMins) ? Math.max(1, Math.min(60, Math.round(rawMins))) : 10;
+      await member.timeout(safeMins * 60 * 1000, `[AI /start1] ${reason}`).catch(() => null);
+      punished++;
+      details.push(`⏳ **TIMEOUT (${safeMins}m)** -> <@${member.id}> (${reason})`);
+      await channel
+        .send({
+          content: `🤖 AI a aplicat **timeout (${safeMins} min)** lui <@${member.id}>. Motiv: *${reason}*.`,
+        })
+        .catch(() => null);
+    }
+  }
+
+  return { checked: candidates.length, punished, details };
+}
+
+function startGuardMonitorForGuild(guild, channel) {
+  stopGuardMonitorForGuild(guild.id);
+  const timer = setInterval(async () => {
+    try {
+      const liveChannel = guild.channels.cache.get(channel.id) ?? (await guild.channels.fetch(channel.id).catch(() => null));
+      if (!liveChannel) {
+        stopGuardMonitorForGuild(guild.id);
+        return;
+      }
+      await scanChannelForViolations(guild, liveChannel);
+    } catch (err) {
+      console.warn('Eroare monitorizare /start1:', err?.message ?? err);
+    }
+  }, GUARD_INTERVAL_MS);
+
+  if (typeof timer.unref === 'function') {
+    timer.unref();
+  }
+
+  guardMonitors.set(guild.id, { channelId: channel.id, timer });
+}
+
+function stopGuardMonitorForGuild(guildId) {
+  const existing = guardMonitors.get(guildId);
+  if (existing?.timer) {
+    clearInterval(existing.timer);
+  }
+  guardMonitors.delete(guildId);
 }
 
 async function generateFullCustomPlanWithAI(promptText) {
@@ -1386,6 +1567,7 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
   ],
 });
 
@@ -1459,6 +1641,68 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (!interaction.isChatInputCommand()) return;
     const { commandName } = interaction;
+
+    if (commandName === 'start1') {
+      const actiune = interaction.options.getString('actiune', true);
+      const chosenChannel = interaction.options.getChannel('canal');
+      const targetChannel = findGeneralChannel(guild, chosenChannel);
+
+      if (actiune === 'stop') {
+        stopGuardMonitorForGuild(guild.id);
+        await interaction
+          .reply({ content: '🛑 Detecția automată `/start1` a fost oprită pe acest server.', ...ephemeralOpts })
+          .catch(() => null);
+        return;
+      }
+
+      if (actiune === 'status') {
+        const active = guardMonitors.get(guild.id);
+        if (!active) {
+          await interaction
+            .reply({ content: 'Status `/start1`: **OPRIT**.', ...ephemeralOpts })
+            .catch(() => null);
+        } else {
+          await interaction
+            .reply({
+              content: `Status `/start1`: **ACTIV** pe canalul <#${active.channelId}> (verificare la fiecare ${Math.round(GUARD_INTERVAL_MS / 1000)}s).`,
+              ...ephemeralOpts,
+            })
+            .catch(() => null);
+        }
+        return;
+      }
+
+      if (!targetChannel) {
+        await interaction
+          .reply({
+            content: 'Nu am găsit canalul `#general`. Selectează opțiunea `canal` sau creează un canal `general`.',
+            ...ephemeralOpts,
+          })
+          .catch(() => null);
+        return;
+      }
+
+      await interaction.deferReply(ephemeralOpts);
+
+      if (actiune === 'start') {
+        startGuardMonitorForGuild(guild, targetChannel);
+      }
+
+      const scanRes = await scanChannelForViolations(guild, targetChannel);
+      const summaryLines = [
+        actiune === 'start'
+          ? `✅ Detecția AI `/start1` a pornit pe <#${targetChannel.id}> (verificare la ${Math.round(GUARD_INTERVAL_MS / 1000)}s).`
+          : `🔍 Scanare AI finalizată pe <#${targetChannel.id}>.`,
+        `Mesaje analizate: **${scanRes.checked}** | Sancțiuni aplicate: **${scanRes.punished}**.`,
+      ];
+
+      if (scanRes.details.length) {
+        summaryLines.push('', ...scanRes.details);
+      }
+
+      await interaction.editReply(summaryLines.join('\n')).catch(() => null);
+      return;
+    }
 
     if (commandName === 'custom_server') {
       await interaction.deferReply(ephemeralOpts);
