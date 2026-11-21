@@ -78,7 +78,7 @@ const DEFAULT_FALLBACK_STRUCTURE = {
 
 const commands = [
   new SlashCommandBuilder()
-    .setName('costom_server')
+    .setName('custom_server')
     .setDescription('Generează complet cu AI roluri, categorii, canale și permisiuni pentru server')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .addStringOption((o) =>
@@ -90,39 +90,13 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName('custom')
-    .setDescription('Acțiuni rapide: schimbă un rol, trimite mesaj sau editează un mesaj')
+    .setDescription('Cere-i AI-ului acțiuni rapide: schimbă un rol, trimite mesaj sau editează mesaj')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
     .addStringOption((o) =>
       o
-        .setName('actiune')
-        .setDescription('Alege ce vrei să faci')
+        .setName('descriere')
+        .setDescription('Spune-i AI-ului ce să facă (ex: schimbă rolul Staff în culoarea #FF0000, trimite mesaj în #general etc.)')
         .setRequired(true)
-        .addChoices(
-          { name: 'Schimbă rol (nume / culoare)', value: 'edit_role' },
-          { name: 'Trimite mesaj într-un canal', value: 'send_message' },
-          { name: 'Editează un mesaj existent (după ID)', value: 'edit_message' }
-        )
-    )
-    .addRoleOption((o) =>
-      o.setName('rol').setDescription('Rolul de modificat (la Schimbă rol)')
-    )
-    .addStringOption((o) =>
-      o.setName('nume_nou').setDescription('Numele nou pentru rol (opțional)')
-    )
-    .addStringOption((o) =>
-      o.setName('culoare_hex').setDescription('Culoare HEX pentru rol, ex: #FF5500 (opțional)')
-    )
-    .addChannelOption((o) =>
-      o
-        .setName('canal')
-        .setDescription('Canalul țintă (pentru mesaj)')
-        .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
-    )
-    .addStringOption((o) =>
-      o.setName('mesaj').setDescription('Textul mesajului nou sau editat')
-    )
-    .addStringOption((o) =>
-      o.setName('message_id').setDescription('ID-ul mesajului de editat (la Editează mesaj)')
     ),
 
   new SlashCommandBuilder()
@@ -488,7 +462,7 @@ async function resolveGroqModels(groqKey) {
 
   if (!res.ok) {
     const errText = await res.text().catch(() => '');
-    throw new Error(`Groq /models ${res.status}:${errText.slice(0, 140)}`);
+    throw new Error(`Groq /models ${res.status}: ${errText.slice(0, 140)}`);
   }
 
   const json = await res.json();
@@ -526,12 +500,80 @@ async function callGroq(fullPrompt) {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${groqKey}`, }, body: JSON.stringify({ model: modelName, messages: [{ role: 'user', content: fullPrompt }], temperature: 0.75, response_format: { type: 'json_object' }, }), }, 20000 );  if (response.ok) { const data = await response.json(); const text = data?.choices?.[0]?.message?.content; if (text) { console.log(`Groq (${modelName}) a răspuns cu succes!`);
+            Authorization: `Bearer ${groqKey}`,
+          },
+          body: JSON.stringify({
+            model: modelName,
+            messages: [{ role: 'user', content: fullPrompt }],
+            temperature: 0.75,
+            response_format: { type: 'json_object' },
+          }),
+        },
+        20000
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        const text = data?.choices?.[0]?.message?.content;
+        if (text) {
+          console.log(`Groq (${modelName}) a răspuns cu succes!`);
           return text;
         }
       } else {
         const errText = await response.text().catch(() => '');
-        lastError = `Groq (${modelName})${response.status}: ${errText.slice(0, 140)}`; console.warn(lastError); } } catch (err) { const detail = err?.message ?? err; lastError = `Groq (${modelName}) eroare: ${detail}`; console.warn(lastError); } }  throw new Error(lastError ? lastError : 'Groq nu a răspuns.'); }  async function callGeminiFallback(fullPrompt) { const apiKey = process.env.GEMINI_API_KEY; if (!apiKey) { throw new Error('Nu este setată nicio cheie validă (GROQ_API_KEY sau GEMINI_API_KEY).'); }  let lastStatus = 0; let lastErrorText = '';  for (const modelName of GEMINI_MODELS) { for (let attempt = 1; attempt <= 2; attempt++) { let response; try { response = await fetchWithTimeout( buildGeminiUrl(modelName, apiKey), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: fullPrompt }] }], generationConfig: { temperature: 0.75 }, }), }, 25000 ); } catch (fetchErr) { lastStatus = 0; lastErrorText = fetchErr?.message ?? String(fetchErr); if (attempt < 2) { await new Promise((r) => setTimeout(r, 2000)); continue; } break; }  if (response.ok) { const data = await response.json(); const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text; if (rawText) { console.log(`Gemini (${modelName}) a răspuns cu succes!`);
+        lastError = `Groq (${modelName}) ${response.status}: ${errText.slice(0, 140)}`;
+        console.warn(lastError);
+      }
+    } catch (err) {
+      const detail = err?.message ?? err;
+      lastError = `Groq (${modelName}) eroare: ${detail}`;
+      console.warn(lastError);
+    }
+  }
+
+  throw new Error(lastError ? lastError : 'Groq nu a răspuns.');
+}
+
+async function callGeminiFallback(fullPrompt) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error('Nu este setată nicio cheie validă (GROQ_API_KEY sau GEMINI_API_KEY).');
+  }
+
+  let lastStatus = 0;
+  let lastErrorText = '';
+
+  for (const modelName of GEMINI_MODELS) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      let response;
+      try {
+        response = await fetchWithTimeout(
+          buildGeminiUrl(modelName, apiKey),
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ role: 'user', parts: [{ text: fullPrompt }] }],
+              generationConfig: { temperature: 0.75 },
+            }),
+          },
+          25000
+        );
+      } catch (fetchErr) {
+        lastStatus = 0;
+        lastErrorText = fetchErr?.message ?? String(fetchErr);
+        if (attempt < 2) {
+          await new Promise((r) => setTimeout(r, 2000));
+          continue;
+        }
+        break;
+      }
+
+      if (response.ok) {
+        const data = await response.json();
+        const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (rawText) {
+          console.log(`Gemini (${modelName}) a răspuns cu succes!`);
           return rawText;
         }
       }
@@ -547,6 +589,45 @@ async function callGroq(fullPrompt) {
   }
 
   throw new Error(`Eroare AI API (${lastStatus}): ${lastErrorText.slice(0, 160)}`);
+}
+
+async function runAIWithFallback(fullPrompt) {
+  let rawText = null;
+  let groqErrMsg = '';
+
+  if (process.env.GROQ_API_KEY) {
+    try {
+      rawText = await callGroq(fullPrompt);
+    } catch (groqErr) {
+      groqErrMsg = groqErr?.message ?? String(groqErr);
+      console.warn('Groq a eșuat, trec pe rezerva Gemini:', groqErrMsg);
+    }
+  }
+
+  if (!rawText) {
+    try {
+      rawText = await callGeminiFallback(fullPrompt);
+    } catch (gemErr) {
+      const gemDetail = gemErr?.message ?? gemErr;
+      if (groqErrMsg) {
+        throw new Error(`Groq: ${groqErrMsg} | Gemini: ${gemDetail}`);
+      }
+      throw new Error(String(gemDetail));
+    }
+  }
+
+  const jsonStart = rawText.indexOf('{');
+  const jsonEnd = rawText.lastIndexOf('}');
+  const cleaned =
+    jsonStart !== -1 && jsonEnd !== -1 && jsonEnd > jsonStart
+      ? rawText.slice(jsonStart, jsonEnd + 1)
+      : rawText
+          .trim()
+          .replace(/^```json\s*/i, '')
+          .replace(/^```\s*/i, '')
+          .replace(/\s*```$/i, '');
+
+  return JSON.parse(cleaned);
 }
 
 async function generateFullCustomPlanWithAI(promptText) {
@@ -599,42 +680,7 @@ Reguli stricte pentru permisiuni:
 
 Instrucțiune utilizator: ${promptText}`;
 
-  let rawText = null;
-  let groqErrMsg = '';
-
-  if (process.env.GROQ_API_KEY) {
-    try {
-      rawText = await callGroq(fullPrompt);
-    } catch (groqErr) {
-      groqErrMsg = groqErr?.message ?? String(groqErr);
-      console.warn('Groq a eșuat, trec pe rezerva Gemini:', groqErrMsg);
-    }
-  }
-
-  if (!rawText) {
-    try {
-      rawText = await callGeminiFallback(fullPrompt);
-    } catch (gemErr) {
-      const gemDetail = gemErr?.message ?? gemErr;
-      if (groqErrMsg) {
-        throw new Error(`Groq: ${groqErrMsg} | Gemini: ${gemDetail}`);
-      }
-      throw new Error(String(gemDetail));
-    }
-  }
-
-  const jsonStart = rawText.indexOf('{');
-  const jsonEnd = rawText.lastIndexOf('}');
-  const cleaned =
-    jsonStart !== -1 && jsonEnd !== -1 && jsonEnd > jsonStart
-      ? rawText.slice(jsonStart, jsonEnd + 1)
-      : rawText
-          .trim()
-          .replace(/^```json\s*/i, '')
-          .replace(/^```\s*/i, '')
-          .replace(/\s*```$/i, '');
-
-  const parsed = JSON.parse(cleaned);
+  const parsed = await runAIWithFallback(fullPrompt);
 
   const roles =
     Array.isArray(parsed.roles) && parsed.roles.length
@@ -671,6 +717,146 @@ Instrucțiune utilizator: ${promptText}`;
     roles,
     cats,
   };
+}
+
+async function generateQuickCustomActionWithAI(promptText, guild, fallbackChannel) {
+  const existingRoles = guild.roles.cache
+    .filter((r) => r.id !== guild.roles.everyone.id)
+    .map((r) => r.name)
+    .slice(0, 40)
+    .join(', ');
+
+  const existingChannels = guild.channels.cache
+    .filter((c) => c.type === ChannelType.GuildText || c.type === ChannelType.GuildAnnouncement)
+    .map((c) => c.name)
+    .slice(0, 40)
+    .join(', ');
+
+  const fullPrompt = `Ești un asistent AI pentru acțiuni rapide pe un server Discord. Primești o cerere de la utilizator în limba română (ex: schimbarea numelui/culorii unui rol, trimiterea unui mesaj/embed într-un canal sau editarea unui mesaj existent).
+Întoarce DOAR JSON valid (fără markdown, fără \`\`\`json, fără text suplimentar).
+
+Roluri existente pe server: ${existingRoles || 'niciunul'}
+Canale text existente pe server: ${existingChannels || 'niciunul'}
+
+Alege una dintre acțiunile următoare și întoarce formatul exact:
+1) Schimbare rol:
+{
+  "action": "edit_role",
+  "targetRoleName": "Numele rolului existent",
+  "newRoleName": "Numele nou (sau gol dacă nu se schimbă)",
+  "colorHex": "#FF5500 (sau gol dacă nu se schimbă)"
+}
+2) Trimitere mesaj:
+{
+  "action": "send_message",
+  "channelName": "numele-canalului (sau gol pentru canalul curent)",
+  "content": "Textul mesajului",
+  "embedTitle": "Titlu embed opțional (sau gol)",
+  "embedColor": "#5865F2"
+}
+3) Editare mesaj existent (dacă utilizatorul oferă un ID de mesaj):
+{
+  "action": "edit_message",
+  "channelName": "numele-canalului (sau gol pentru canalul curent)",
+  "messageId": "ID-ul mesajului",
+  "content": "Noul text al mesajului"
+}
+
+Cerere utilizator: ${promptText}`;
+
+  const parsed = await runAIWithFallback(fullPrompt);
+  const action = String(parsed?.action ?? '').trim();
+
+  if (action === 'edit_role') {
+    const targetRole = resolveRoleByName(new Map(), guild, parsed.targetRoleName);
+    if (!targetRole) {
+      throw new Error(`Nu am găsit rolul "${parsed.targetRoleName ?? ''}" pe server.`);
+    }
+
+    const patch = {};
+    const nextName = String(parsed.newRoleName ?? '').trim();
+    const nextColor = String(parsed.colorHex ?? '').trim();
+
+    if (nextName) patch.name = nextName.slice(0, 80);
+    if (nextColor && /^#[0-9A-Fa-f]{6}$/.test(nextColor)) {
+      patch.colors = { primaryColor: nextColor };
+    }
+
+    if (!patch.name && !patch.colors) {
+      throw new Error('AI-ul nu a detectat nume nou sau culoare HEX validă (#RRGGBB) pentru rol.');
+    }
+
+    await targetRole.edit(patch);
+    return `Am actualizat rolul <@&${targetRole.id}> (\`${targetRole.name}\`) conform cererii AI.`;
+  }
+
+  if (action === 'send_message') {
+    const requestedCh = sanitizeChannelName(parsed.channelName);
+    const targetChannel = requestedCh
+      ? guild.channels.cache.find(
+          (c) =>
+            (c.type === ChannelType.GuildText || c.type === ChannelType.GuildAnnouncement) &&
+            (c.name === requestedCh || normalizeLookupName(c.name) === normalizeLookupName(parsed.channelName))
+        ) ?? fallbackChannel
+      : fallbackChannel;
+
+    if (!targetChannel || typeof targetChannel.send !== 'function') {
+      throw new Error('Nu am găsit un canal text valid pentru trimiterea mesajului.');
+    }
+
+    const content = String(parsed.content ?? '').trim();
+    const embedTitle = String(parsed.embedTitle ?? '').trim();
+    if (!content && !embedTitle) {
+      throw new Error('Mesajul generat de AI este gol.');
+    }
+
+    if (embedTitle) {
+      const embed = new EmbedBuilder()
+        .setTitle(embedTitle.slice(0, 200))
+        .setDescription(content ? content.slice(0, 3900) : null)
+        .setColor(sanitizeHexColor(parsed.embedColor))
+        .setTimestamp();
+      const sent = await targetChannel.send({ embeds: [embed] });
+      return `Am trimis mesajul embed în <#${targetChannel.id}> (ID: \`${sent.id}\`).`;
+    }
+
+    const sent = await targetChannel.send(content.slice(0, 2000));
+    return `Am trimis mesajul în <#${targetChannel.id}> (ID: \`${sent.id}\`).`;
+  }
+
+  if (action === 'edit_message') {
+    const requestedCh = sanitizeChannelName(parsed.channelName);
+    const targetChannel = requestedCh
+      ? guild.channels.cache.find(
+          (c) =>
+            (c.type === ChannelType.GuildText || c.type === ChannelType.GuildAnnouncement) &&
+            (c.name === requestedCh || normalizeLookupName(c.name) === normalizeLookupName(parsed.channelName))
+        ) ?? fallbackChannel
+      : fallbackChannel;
+
+    const messageId = String(parsed.messageId ?? '').trim();
+    const content = String(parsed.content ?? '').trim();
+
+    if (!targetChannel || !targetChannel.messages || typeof targetChannel.messages.fetch !== 'function') {
+      throw new Error('Nu am găsit canalul pentru editarea mesajului.');
+    }
+    if (!/^\d{15,22}$/.test(messageId) || !content) {
+      throw new Error('Specifică un ID valid de mesaj și noul conținut.');
+    }
+
+    const msg = await targetChannel.messages.fetch(messageId).catch(() => null);
+    if (!msg) {
+      throw new Error(`Nu am găsit mesajul \`${messageId}\` în <#${targetChannel.id}>.`);
+    }
+    if (!msg.editable) {
+      throw new Error('Botul poate edita doar mesajele trimise de el.');
+    }
+
+    await msg.edit(content.slice(0, 2000));
+    return `Am editat mesajul \`${messageId}\` din <#${targetChannel.id}>.`;
+  }
+
+  throw new Error('Nu am putut identifica acțiunea cerută. Încearcă să specifici clar rolul, canalul sau mesajul.');
 }
 
 async function applyServerStructure(guild, structure) {
@@ -1274,7 +1460,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
     const { commandName } = interaction;
 
-    if (commandName === 'costom_server') {
+    if (commandName === 'custom_server') {
       await interaction.deferReply(ephemeralOpts);
 
       const descriere = interaction.options.getString('descriere', true);
@@ -1295,118 +1481,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (commandName === 'custom') {
-      const actiune = interaction.options.getString('actiune', true);
+      await interaction.deferReply(ephemeralOpts);
 
-      if (actiune === 'edit_role') {
-        const rol = interaction.options.getRole('rol');
-        const numeNou = (interaction.options.getString('nume_nou') ?? '').trim();
-        const culoareRaw = (interaction.options.getString('culoare_hex') ?? '').trim();
+      const descriere = interaction.options.getString('descriere', true);
+      const resultText = await generateQuickCustomActionWithAI(descriere, guild, interaction.channel);
 
-        if (!rol) {
-          await interaction
-            .reply({ content: 'Selectează opțiunea `rol` pe care vrei să îl modifici.', ...ephemeralOpts })
-            .catch(() => null);
-          return;
-        }
-
-        const guildRole = guild.roles.cache.get(rol.id) ?? (await guild.roles.fetch(rol.id).catch(() => null));
-        if (!guildRole) {
-          await interaction
-            .reply({ content: 'Nu am găsit rolul pe server.', ...ephemeralOpts })
-            .catch(() => null);
-          return;
-        }
-
-        const patch = {};
-        if (numeNou) patch.name = numeNou.slice(0, 80);
-        if (culoareRaw) {
-          if (!/^#[0-9A-Fa-f]{6}$/.test(culoareRaw)) {
-            await interaction
-              .reply({ content: 'Culoarea HEX trebuie să fie de forma `#FF5500`.', ...ephemeralOpts })
-              .catch(() => null);
-            return;
-          }
-          patch.colors = { primaryColor: culoareRaw };
-        }
-
-        if (!patch.name && !patch.colors) {
-          await interaction
-            .reply({ content: 'Completează `nume_nou` și/sau `culoare_hex` pentru rol.', ...ephemeralOpts })
-            .catch(() => null);
-          return;
-        }
-
-        await guildRole.edit(patch);
-        await interaction
-          .reply({ content: `Am actualizat rolul <@&${guildRole.id}> (\`${guildRole.name}\`).`, ...ephemeralOpts })
-          .catch(() => null);
-        return;
-      }
-
-      if (actiune === 'send_message') {
-        const canal = interaction.options.getChannel('canal') ?? interaction.channel;
-        const mesaj = (interaction.options.getString('mesaj') ?? '').trim();
-
-        if (!canal || typeof canal.send !== 'function') {
-          await interaction
-            .reply({ content: 'Selectează un canal text valid.', ...ephemeralOpts })
-            .catch(() => null);
-          return;
-        }
-        if (!mesaj) {
-          await interaction
-            .reply({ content: 'Scrie conținutul la opțiunea `mesaj`.', ...ephemeralOpts })
-            .catch(() => null);
-          return;
-        }
-
-        const sent = await canal.send(mesaj);
-        await interaction
-          .reply({
-            content: `Mesajul a fost trimis în <#${canal.id}> (ID: \`${sent.id}\`).`,
-            ...ephemeralOpts,
-          })
-          .catch(() => null);
-        return;
-      }
-
-      if (actiune === 'edit_message') {
-        const canal = interaction.options.getChannel('canal') ?? interaction.channel;
-        const messageId = (interaction.options.getString('message_id') ?? '').trim();
-        const mesaj = (interaction.options.getString('mesaj') ?? '').trim();
-
-        if (!canal || !canal.messages || typeof canal.messages.fetch !== 'function') {
-          await interaction
-            .reply({ content: 'Selectează un canal text valid.', ...ephemeralOpts })
-            .catch(() => null);
-          return;
-        }
-        if (!/^\d{15,22}$/.test(messageId) || !mesaj) {
-          await interaction
-            .reply({ content: 'Completează un `message_id` numeric valid și noul text la `mesaj`.', ...ephemeralOpts })
-            .catch(() => null);
-          return;
-        }
-
-        const targetMsg = await canal.messages.fetch(messageId).catch(() => null);
-        if (!targetMsg) {
-          await interaction
-            .reply({ content: 'Nu am găsit mesajul în acel canal.', ...ephemeralOpts })
-            .catch(() => null);
-          return;
-        }
-        if (!targetMsg.editable) {
-          await interaction
-            .reply({ content: 'Botul poate edita doar mesajele trimise de el.', ...ephemeralOpts })
-            .catch(() => null);
-          return;
-        }
-
-        await targetMsg.edit(mesaj);
-        await interaction
-          .reply({ content: `Mesajul \`${messageId}\` a fost editat în <#${canal.id}>.`, ...ephemeralOpts })
-          .catch(() => null);
-      }
+      await interaction.editReply(resultText).catch(() => null);
       return;
     }
 
