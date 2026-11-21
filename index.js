@@ -95,7 +95,7 @@ const commands = [
     .addStringOption((o) =>
       o
         .setName('descriere')
-        .setDescription('Spune-i AI-ului ce să facă (ex: schimbă rolul Staff în culoarea #FF0000, trimite mesaj în #general etc.)')
+        .setDescription('Ex: schimbă culoarea rolului Staff în #FF0000 sau trimite mesaj în #general')
         .setRequired(true)
     ),
 
