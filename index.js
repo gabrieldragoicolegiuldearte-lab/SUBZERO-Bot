@@ -78,14 +78,51 @@ const DEFAULT_FALLBACK_STRUCTURE = {
 
 const commands = [
   new SlashCommandBuilder()
-    .setName('custom')
-    .setDescription('Generează complet cu AI roluri, categorii, canale și permisiuni după orice cerere')
+    .setName('costom_server')
+    .setDescription('Generează complet cu AI roluri, categorii, canale și permisiuni pentru server')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .addStringOption((o) =>
       o
         .setName('descriere')
-        .setDescription('Scrie-i botului exact ce să facă (roluri, categorii, canale, permisiuni de scriere/vizualizare etc.)')
+        .setDescription('Descrie structura serverului: roluri, categorii, canale, permisiuni etc.')
         .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName('custom')
+    .setDescription('Acțiuni rapide: schimbă un rol, trimite mesaj sau editează un mesaj')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
+    .addStringOption((o) =>
+      o
+        .setName('actiune')
+        .setDescription('Alege ce vrei să faci')
+        .setRequired(true)
+        .addChoices(
+          { name: 'Schimbă rol (nume / culoare)', value: 'edit_role' },
+          { name: 'Trimite mesaj într-un canal', value: 'send_message' },
+          { name: 'Editează un mesaj existent (după ID)', value: 'edit_message' }
+        )
+    )
+    .addRoleOption((o) =>
+      o.setName('rol').setDescription('Rolul de modificat (la Schimbă rol)')
+    )
+    .addStringOption((o) =>
+      o.setName('nume_nou').setDescription('Numele nou pentru rol (opțional)')
+    )
+    .addStringOption((o) =>
+      o.setName('culoare_hex').setDescription('Culoare HEX pentru rol, ex: #FF5500 (opțional)')
+    )
+    .addChannelOption((o) =>
+      o
+        .setName('canal')
+        .setDescription('Canalul țintă (pentru mesaj)')
+        .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
+    )
+    .addStringOption((o) =>
+      o.setName('mesaj').setDescription('Textul mesajului nou sau editat')
+    )
+    .addStringOption((o) =>
+      o.setName('message_id').setDescription('ID-ul mesajului de editat (la Editează mesaj)')
     ),
 
   new SlashCommandBuilder()
@@ -198,19 +235,34 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName('drop')
-    .setDescription('Postează rapid un anunț de drop / stoc resell')
+    .setDescription('Postează un anunț complex de drop / stoc cu imagine')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
     .addStringOption((o) =>
       o.setName('produs').setDescription('Numele produsului / drop-ului').setRequired(true)
     )
     .addStringOption((o) =>
-      o.setName('pret').setDescription('Preț / detalii').setRequired(true)
+      o.setName('pret').setDescription('Prețul produsului / drop-ului').setRequired(true)
+    )
+    .addStringOption((o) =>
+      o.setName('stoc').setDescription('Stoc disponibil / cantitate (opțional)')
+    )
+    .addStringOption((o) =>
+      o.setName('detalii').setDescription('Descriere, condiții sau informații suplimentare (opțional)')
+    )
+    .addAttachmentOption((o) =>
+      o.setName('imagine').setDescription('Încarcă o imagine pentru drop (opțional)')
+    )
+    .addStringOption((o) =>
+      o.setName('imagine_url').setDescription('Sau pune un link direct către imagine (opțional)')
     )
     .addChannelOption((o) =>
       o
         .setName('canal')
         .setDescription('Canalul unde se postează')
         .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
+    )
+    .addRoleOption((o) =>
+      o.setName('rol_tag').setDescription('Rol de menționat la drop (opțional)')
     ),
 
   new SlashCommandBuilder()
@@ -1222,7 +1274,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
     const { commandName } = interaction;
 
-    if (commandName === 'custom') {
+    if (commandName === 'costom_server') {
       await interaction.deferReply(ephemeralOpts);
 
       const descriere = interaction.options.getString('descriere', true);
@@ -1239,6 +1291,122 @@ client.on(Events.InteractionCreate, async (interaction) => {
           `Gata! Am generat cu AI **${plan.title}**.\n**Roluri create:** ${rolesList}\n${catsList}`
         )
         .catch(() => null);
+      return;
+    }
+
+    if (commandName === 'custom') {
+      const actiune = interaction.options.getString('actiune', true);
+
+      if (actiune === 'edit_role') {
+        const rol = interaction.options.getRole('rol');
+        const numeNou = (interaction.options.getString('nume_nou') ?? '').trim();
+        const culoareRaw = (interaction.options.getString('culoare_hex') ?? '').trim();
+
+        if (!rol) {
+          await interaction
+            .reply({ content: 'Selectează opțiunea `rol` pe care vrei să îl modifici.', ...ephemeralOpts })
+            .catch(() => null);
+          return;
+        }
+
+        const guildRole = guild.roles.cache.get(rol.id) ?? (await guild.roles.fetch(rol.id).catch(() => null));
+        if (!guildRole) {
+          await interaction
+            .reply({ content: 'Nu am găsit rolul pe server.', ...ephemeralOpts })
+            .catch(() => null);
+          return;
+        }
+
+        const patch = {};
+        if (numeNou) patch.name = numeNou.slice(0, 80);
+        if (culoareRaw) {
+          if (!/^#[0-9A-Fa-f]{6}$/.test(culoareRaw)) {
+            await interaction
+              .reply({ content: 'Culoarea HEX trebuie să fie de forma `#FF5500`.', ...ephemeralOpts })
+              .catch(() => null);
+            return;
+          }
+          patch.colors = { primaryColor: culoareRaw };
+        }
+
+        if (!patch.name && !patch.colors) {
+          await interaction
+            .reply({ content: 'Completează `nume_nou` și/sau `culoare_hex` pentru rol.', ...ephemeralOpts })
+            .catch(() => null);
+          return;
+        }
+
+        await guildRole.edit(patch);
+        await interaction
+          .reply({ content: `Am actualizat rolul <@&${guildRole.id}> (\`${guildRole.name}\`).`, ...ephemeralOpts })
+          .catch(() => null);
+        return;
+      }
+
+      if (actiune === 'send_message') {
+        const canal = interaction.options.getChannel('canal') ?? interaction.channel;
+        const mesaj = (interaction.options.getString('mesaj') ?? '').trim();
+
+        if (!canal || typeof canal.send !== 'function') {
+          await interaction
+            .reply({ content: 'Selectează un canal text valid.', ...ephemeralOpts })
+            .catch(() => null);
+          return;
+        }
+        if (!mesaj) {
+          await interaction
+            .reply({ content: 'Scrie conținutul la opțiunea `mesaj`.', ...ephemeralOpts })
+            .catch(() => null);
+          return;
+        }
+
+        const sent = await canal.send(mesaj);
+        await interaction
+          .reply({
+            content: `Mesajul a fost trimis în <#${canal.id}> (ID: \`${sent.id}\`).`,
+            ...ephemeralOpts,
+          })
+          .catch(() => null);
+        return;
+      }
+
+      if (actiune === 'edit_message') {
+        const canal = interaction.options.getChannel('canal') ?? interaction.channel;
+        const messageId = (interaction.options.getString('message_id') ?? '').trim();
+        const mesaj = (interaction.options.getString('mesaj') ?? '').trim();
+
+        if (!canal || !canal.messages || typeof canal.messages.fetch !== 'function') {
+          await interaction
+            .reply({ content: 'Selectează un canal text valid.', ...ephemeralOpts })
+            .catch(() => null);
+          return;
+        }
+        if (!/^\d{15,22}$/.test(messageId) || !mesaj) {
+          await interaction
+            .reply({ content: 'Completează un `message_id` numeric valid și noul text la `mesaj`.', ...ephemeralOpts })
+            .catch(() => null);
+          return;
+        }
+
+        const targetMsg = await canal.messages.fetch(messageId).catch(() => null);
+        if (!targetMsg) {
+          await interaction
+            .reply({ content: 'Nu am găsit mesajul în acel canal.', ...ephemeralOpts })
+            .catch(() => null);
+          return;
+        }
+        if (!targetMsg.editable) {
+          await interaction
+            .reply({ content: 'Botul poate edita doar mesajele trimise de el.', ...ephemeralOpts })
+            .catch(() => null);
+          return;
+        }
+
+        await targetMsg.edit(mesaj);
+        await interaction
+          .reply({ content: `Mesajul \`${messageId}\` a fost editat în <#${canal.id}>.`, ...ephemeralOpts })
+          .catch(() => null);
+      }
       return;
     }
 
@@ -1336,16 +1504,72 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (commandName === 'drop') {
       const produs = interaction.options.getString('produs', true);
       const pret = interaction.options.getString('pret', true);
+      const stoc = (interaction.options.getString('stoc') ?? '').trim();
+      const detalii = (interaction.options.getString('detalii') ?? '').trim();
+      const imagineAttachment = interaction.options.getAttachment('imagine');
+      const imagineUrlRaw = (interaction.options.getString('imagine_url') ?? '').trim();
       const canal = interaction.options.getChannel('canal') ?? interaction.channel;
+      const rolTag = interaction.options.getRole('rol_tag');
+
+      if (!canal || typeof canal.send !== 'function') {
+        await interaction
+          .reply({ content: 'Selectează un canal text valid pentru drop.', ...ephemeralOpts })
+          .catch(() => null);
+        return;
+      }
+
+      const files = [];
+      let imageTargetUrl = null;
+
+      if (imagineAttachment) {
+        if (imagineAttachment.contentType && !imagineAttachment.contentType.startsWith('image/')) {
+          await interaction
+            .reply({ content: 'Fișierul atașat la `imagine` trebuie să fie o imagine.', ...ephemeralOpts })
+            .catch(() => null);
+          return;
+        }
+        files.push(imagineAttachment);
+        imageTargetUrl = `attachment://${imagineAttachment.name}`;
+      } else if (imagineUrlRaw) {
+        if (/^https?:\/\//i.test(imagineUrlRaw)) {
+          imageTargetUrl = imagineUrlRaw;
+        } else {
+          await interaction
+            .reply({ content: 'Link-ul `imagine_url` trebuie să înceapă cu `http://` sau `https://`.', ...ephemeralOpts })
+            .catch(() => null);
+          return;
+        }
+      }
+
+      const descriptionLines = [
+        `💰 **Preț:** ${pret}`,
+        stoc ? `📦 **Stoc:** ${stoc}` : null,
+        detalii ? `\n📝 **Detalii:**\n${detalii}` : null,
+      ].filter(Boolean);
 
       const embed = new EmbedBuilder()
-        .setTitle(`📦 DROP / STOC: ${produs}`)
-        .setDescription(`**Detalii / Preț:** ${pret}`)
-        .setColor('#5865F2')
+        .setTitle(`🔥 DROP NOU: ${produs}`)
+        .setDescription(descriptionLines.join('\n'))
+        .setColor('#10B981')
+        .setFooter({ text: `Postat de ${interaction.user.tag}` })
         .setTimestamp();
 
-      await canal.send({ embeds: [embed] });
-      await interaction.reply({ content: `Drop postat în <#${canal.id}>.`, ...ephemeralOpts }).catch(() => null);
+      if (imageTargetUrl) {
+        embed.setImage(imageTargetUrl);
+      }
+
+      await canal.send({
+        content: rolTag ? `<@&${rolTag.id}>` : undefined,
+        embeds: [embed],
+        files,
+        allowedMentions: {
+          roles: rolTag ? [rolTag.id] : [],
+        },
+      });
+
+      await interaction
+        .reply({ content: `Drop-ul **${produs}** a fost postat în <#${canal.id}>.`, ...ephemeralOpts })
+        .catch(() => null);
       return;
     }
 
