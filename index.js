@@ -43,7 +43,7 @@ const TICKET_OPEN_BTN_ID = 'subzero_ticket_open_buy';
 const TICKET_CLAIM_BTN_ID = 'subzero_ticket_claim_staff';
 const TICKET_CLOSE_BTN_ID = 'subzero_ticket_close';
 
-const GUARD_INTERVAL_MS = 45000;
+const GUARD_INTERVAL_MS = 30000;
 const processedGuardMessageIds = new Set();
 const guardMonitors = new Map();
 
@@ -83,7 +83,7 @@ const DEFAULT_FALLBACK_STRUCTURE = {
 const commands = [
   new SlashCommandBuilder()
     .setName('start1')
-    .setDescription('Pornește sau rulează detecția AI în #general (timeout sau kick după decizia AI)')
+    .setDescription('Pornește sau rulează detecția AI în #general (șterge mesaj + timeout sau kick)')
     .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
     .addStringOption((o) =>
       o
@@ -547,7 +547,7 @@ async function callGroq(fullPrompt) {
           body: JSON.stringify({
             model: modelName,
             messages: [{ role: 'user', content: fullPrompt }],
-            temperature: 0.5,
+            temperature: 0.4,
             max_tokens: 900,
             response_format: { type: 'json_object' },
           }),
@@ -597,7 +597,7 @@ async function callGeminiFallback(fullPrompt) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               contents: [{ role: 'user', parts: [{ text: fullPrompt }] }],
-              generationConfig: { temperature: 0.5 },
+              generationConfig: { temperature: 0.4 },
             }),
           },
           25000
@@ -680,8 +680,8 @@ async function evaluateChannelMessagesWithAI(messagesBatch, channelName) {
     msg: String(m.content || '[atașament]').slice(0, 180),
   }));
 
-  const fullPrompt = `Moderează canalul #${channelName}. Marchează doar mesajele nepotrivite (spam, insulte/limbaj vulgar, scam/linkuri suspecte, trolling).
-Alege "timeout" (1-60 min) pentru abateri moderate sau "kick" pentru abateri grave.
+  const fullPrompt = `Ești un moderator AI strict pe canalul #${channelName}. Marchează ORICE mesaj nepotrivit: înjurături, limbaj vulgar, insulte (chiar prescurtate sau cu diacritice), spam, flood, scam/linkuri suspecte, trolling.
+Alege "timeout" (1-60 min) pentru înjurături/limbaj vulgar/spam moderat sau "kick" pentru abateri grave/repetate.
 Răspunde DOAR JSON:
 {"violations":[{"mid":"...","uid":"...","punishment":"timeout","timeoutMinutes":10,"reason":"motiv scurt"}]}
 
@@ -696,7 +696,7 @@ async function scanChannelForViolations(guild, channel) {
     return { checked: 0, punished: 0, details: [] };
   }
 
-  const fetched = await channel.messages.fetch({ limit: 6 }).catch(() => null);
+  const fetched = await channel.messages.fetch({ limit: 8 }).catch(() => null);
   if (!fetched || fetched.size === 0) {
     return { checked: 0, punished: 0, details: [] };
   }
@@ -730,38 +730,52 @@ async function scanChannelForViolations(guild, channel) {
   for (const v of violations) {
     const msg = byId.get(String(v?.mid ?? v?.messageId ?? ''));
     const targetId = String(v?.uid ?? v?.authorId ?? msg?.author?.id ?? '').trim();
-    if (!targetId || targetId === guild.ownerId || (me && targetId === me.id)) {
+    const reason = String(v?.reason ?? 'Mesaj nepotrivit detectat de AI').slice(0, 350);
+
+    if (msg && msg.deletable && me?.permissions.has(PermissionFlagsBits.ManageMessages)) {
+      await msg.delete().catch(() => null);
+    }
+
+    if (!targetId || (me && targetId === me.id)) {
+      continue;
+    }
+
+    if (targetId === guild.ownerId) {
+      details.push(`⚠️ Mesaj șters la <@${targetId}> (owner-ul serverului nu poate primi timeout/kick prin bot).`);
       continue;
     }
 
     const member =
       msg?.member ?? (await guild.members.fetch(targetId).catch(() => null));
     if (!member) continue;
+
     if (me && member.roles.highest.position >= me.roles.highest.position) {
+      details.push(`⚠️ Mesaj șters la <@${member.id}> (grad egal sau mai mare decât rolul botului).`);
       continue;
     }
 
     const decision = String(v?.punishment ?? '').toLowerCase().trim();
-    const reason = String(v?.reason ?? 'Mesaj nepotrivit detectat de AI').slice(0, 350);
 
     if (decision === 'kick' && me?.permissions.has(PermissionFlagsBits.KickMembers) && member.kickable) {
       await member.kick(`[AI /start1] ${reason}`).catch(() => null);
       punished++;
-      details.push(`🥾 **KICK** -> <@${member.id}> (${reason})`);
+      details.push(`🥾 **KICK + ȘTERGERE** -> <@${member.id}> (${reason})`);
       await channel
-        .send({ content: `🤖 AI a detectat o abatere gravă și a dat **kick** lui <@${member.id}>. Motiv: *${reason}*.` })
+        .send({ content: `🤖 AI a șters mesajul și a dat **kick** lui <@${member.id}>. Motiv: *${reason}*.` })
         .catch(() => null);
     } else if (me?.permissions.has(PermissionFlagsBits.ModerateMembers)) {
       const rawMins = Number(v?.timeoutMinutes);
       const safeMins = Number.isFinite(rawMins) ? Math.max(1, Math.min(60, Math.round(rawMins))) : 10;
       await member.timeout(safeMins * 60 * 1000, `[AI /start1] ${reason}`).catch(() => null);
       punished++;
-      details.push(`⏳ **TIMEOUT (${safeMins}m)** -> <@${member.id}> (${reason})`);
+      details.push(`⏳ **TIMEOUT (${safeMins}m) + ȘTERGERE** -> <@${member.id}> (${reason})`);
       await channel
         .send({
-          content: `🤖 AI a aplicat **timeout (${safeMins} min)** lui <@${member.id}>. Motiv: *${reason}*.`,
+          content: `🤖 AI a șters mesajul și a aplicat **timeout (${safeMins} min)** lui <@${member.id}>. Motiv: *${reason}*.`,
         })
         .catch(() => null);
+    } else {
+      details.push(`⚠️ Mesaj șters la <@${member.id}> (verifică permisiunile Moderate/Kick ale botului).`);
     }
   }
 
