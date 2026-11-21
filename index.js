@@ -508,13 +508,16 @@ async function resolveGroqModels(groqKey) {
   const rawList = json?.data ?? [];
   const ids = Array.isArray(rawList) ? rawList.map((m) => String(m?.id ?? '')).filter(Boolean) : [];
 
-  const preferred = ids.filter(
-    (id) =>
-      !/whisper|guard|prompt-guard|tts|audio|vision|embedding|safeguard/i.test(id) &&
-      (id.includes('llama') || id.includes('qwen') || id.includes('gemma') || id.includes('deepseek') || id.includes('mixtral'))
+  const chatCandidates = ids.filter(
+    (id) => !/whisper|guard|prompt-guard|tts|audio|vision|embedding|safeguard/i.test(id)
   );
 
-  const candidates = preferred.length > 0 ? preferred.slice(0, 4) : ids.slice(0, 3);
+  const lightweightFirst = [
+    ...chatCandidates.filter((id) => /8b|9b|7b|mini|flash|instant/i.test(id)),
+    ...chatCandidates.filter((id) => !/8b|9b|7b|mini|flash|instant/i.test(id)),
+  ];
+
+  const candidates = Array.from(new Set(lightweightFirst)).slice(0, 4);
   if (candidates.length === 0) {
     throw new Error('Nu s-a găsit niciun model Groq activ pe cheie.');
   }
@@ -544,7 +547,8 @@ async function callGroq(fullPrompt) {
           body: JSON.stringify({
             model: modelName,
             messages: [{ role: 'user', content: fullPrompt }],
-            temperature: 0.75,
+            temperature: 0.5,
+            max_tokens: 900,
             response_format: { type: 'json_object' },
           }),
         },
@@ -593,7 +597,7 @@ async function callGeminiFallback(fullPrompt) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               contents: [{ role: 'user', parts: [{ text: fullPrompt }] }],
-              generationConfig: { temperature: 0.75 },
+              generationConfig: { temperature: 0.5 },
             }),
           },
           25000
@@ -671,34 +675,17 @@ async function runAIWithFallback(fullPrompt) {
 
 async function evaluateChannelMessagesWithAI(messagesBatch, channelName) {
   const formatted = messagesBatch.map((m) => ({
-    messageId: m.id,
-    authorId: m.author.id,
-    authorTag: m.author.tag,
-    content: m.content || '[fără text / atașament]',
+    mid: m.id,
+    uid: m.author.id,
+    msg: String(m.content || '[atașament]').slice(0, 180),
   }));
 
-  const fullPrompt = `Ești un moderator AI strict și echilibrat pentru un canal de chat Discord (#${channelName}).
-Analizează mesajele de mai jos și decide dacă există mesaje care nu sunt la locul lor (ex: spam, flood, limbaj vulgar/jigniri, promovare/linkuri suspecte, scam, trolling).
-Pentru fiecare mesaj nepotrivit, decide acțiunea:
-- "timeout" (pentru abateri moderate: limbaj vulgar, spam ușor, caps/flood, comportament deranjant) + alege "timeoutMinutes" între 1 și 60;
-- "kick" (pentru abateri grave: linkuri periculoase/scam, atacuri grave, spam masiv).
-Dacă un mesaj este normal / ok, nu îl include în "violations".
+  const fullPrompt = `Moderează canalul #${channelName}. Marchează doar mesajele nepotrivite (spam, insulte/limbaj vulgar, scam/linkuri suspecte, trolling).
+Alege "timeout" (1-60 min) pentru abateri moderate sau "kick" pentru abateri grave.
+Răspunde DOAR JSON:
+{"violations":[{"mid":"...","uid":"...","punishment":"timeout","timeoutMinutes":10,"reason":"motiv scurt"}]}
 
-Întoarce DOAR JSON valid (fără markdown, fără \`\`\`json, fără text suplimentar):
-{
-  "violations": [
-    {
-      "messageId": "id_mesaj",
-      "authorId": "id_autor",
-      "punishment": "timeout",
-      "timeoutMinutes": 10,
-      "reason": "Motiv scurt în română"
-    }
-  ]
-}
-
-Mesaje de analizat:
-${JSON.stringify(formatted)}`;
+Mesaje: ${JSON.stringify(formatted)}`;
 
   const parsed = await runAIWithFallback(fullPrompt);
   return Array.isArray(parsed?.violations) ? parsed.violations : [];
@@ -709,7 +696,7 @@ async function scanChannelForViolations(guild, channel) {
     return { checked: 0, punished: 0, details: [] };
   }
 
-  const fetched = await channel.messages.fetch({ limit: 15 }).catch(() => null);
+  const fetched = await channel.messages.fetch({ limit: 6 }).catch(() => null);
   if (!fetched || fetched.size === 0) {
     return { checked: 0, punished: 0, details: [] };
   }
@@ -741,8 +728,8 @@ async function scanChannelForViolations(guild, channel) {
   let punished = 0;
 
   for (const v of violations) {
-    const msg = byId.get(String(v?.messageId ?? ''));
-    const targetId = String(v?.authorId ?? msg?.author?.id ?? '').trim();
+    const msg = byId.get(String(v?.mid ?? v?.messageId ?? ''));
+    const targetId = String(v?.uid ?? v?.authorId ?? msg?.author?.id ?? '').trim();
     if (!targetId || targetId === guild.ownerId || (me && targetId === me.id)) {
       continue;
     }
