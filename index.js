@@ -798,6 +798,67 @@ function stopGuardMonitorForGuild(guildId) {
   guardMonitors.delete(guildId);
 }
 
+async function handleStart1Command(interaction, guild, ephemeralOpts) {
+  const actiune = interaction.options.getString('actiune', true);
+  const chosenChannel = interaction.options.getChannel('canal');
+  const targetChannel = findGeneralChannel(guild, chosenChannel);
+
+  if (actiune === 'stop') {
+    stopGuardMonitorForGuild(guild.id);
+    await interaction
+      .reply({ content: '🛑 Detecția automată `/start1` a fost oprită pe acest server.', ...ephemeralOpts })
+      .catch(() => null);
+    return;
+  }
+
+  if (actiune === 'status') {
+    const active = guardMonitors.get(guild.id);
+    if (!active) {
+      await interaction
+        .reply({ content: 'Status `/start1`: **OPRIT**.', ...ephemeralOpts })
+        .catch(() => null);
+    } else {
+      await interaction
+        .reply({
+          content: `Status `/start1`: **ACTIV** pe canalul <#${active.channelId}> (verificare la fiecare ${Math.round(GUARD_INTERVAL_MS / 1000)}s).`,
+          ...ephemeralOpts,
+        })
+        .catch(() => null);
+    }
+    return;
+  }
+
+  if (!targetChannel) {
+    await interaction
+      .reply({
+        content: 'Nu am găsit canalul `#general`. Selectează opțiunea `canal` sau creează un canal `general`.',
+        ...ephemeralOpts,
+      })
+      .catch(() => null);
+    return;
+  }
+
+  await interaction.deferReply(ephemeralOpts);
+
+  if (actiune === 'start') {
+    startGuardMonitorForGuild(guild, targetChannel);
+  }
+
+  const scanRes = await scanChannelForViolations(guild, targetChannel);
+  const summaryLines = [
+    actiune === 'start'
+      ? `✅ Detecția AI \`/start1\` a pornit pe <#${targetChannel.id}> (verificare la ${Math.round(GUARD_INTERVAL_MS / 1000)}s).`
+      : `🔍 Scanare AI finalizată pe <#${targetChannel.id}>.`,
+    `Mesaje analizate: **${scanRes.checked}** | Sancțiuni aplicate: **${scanRes.punished}**.`,
+  ];
+
+  if (scanRes.details.length) {
+    summaryLines.push('', ...scanRes.details);
+  }
+
+  await interaction.editReply(summaryLines.join('\n')).catch(() => null);
+}
+
 async function generateFullCustomPlanWithAI(promptText) {
   const fullPrompt = `Ești un designer profesionist de servere Discord. Primești orice instrucțiune / cerere de la utilizator în limba română (poate fi orice tematică sau cerințe exacte de roluri, categorii, canale și permisiuni) și construiești exact structura cerută.
 Întoarce DOAR JSON valid (fără markdown, fără \`\`\`json, fără text suplimentar).
@@ -1630,64 +1691,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const { commandName } = interaction;
 
     if (commandName === 'start1') {
-      const actiune = interaction.options.getString('actiune', true);
-      const chosenChannel = interaction.options.getChannel('canal');
-      const targetChannel = findGeneralChannel(guild, chosenChannel);
-
-      if (actiune === 'stop') {
-        stopGuardMonitorForGuild(guild.id);
-        await interaction
-          .reply({ content: '🛑 Detecția automată `/start1` a fost oprită pe acest server.', ...ephemeralOpts })
-          .catch(() => null);
-        return;
-      }
-
-      if (actiune === 'status') {
-        const active = guardMonitors.get(guild.id);
-        if (!active) {
-          await interaction
-            .reply({ content: 'Status `/start1`: **OPRIT**.', ...ephemeralOpts })
-            .catch(() => null);
-        } else {
-          await interaction
-            .reply({
-              content: `Status `/start1`: **ACTIV** pe canalul <#${active.channelId}> (verificare la fiecare ${Math.round(GUARD_INTERVAL_MS / 1000)}s).`,
-              ...ephemeralOpts,
-            })
-            .catch(() => null);
-        }
-        return;
-      }
-
-      if (!targetChannel) {
-        await interaction
-          .reply({
-            content: 'Nu am găsit canalul `#general`. Selectează opțiunea `canal` sau creează un canal `general`.',
-            ...ephemeralOpts,
-          })
-          .catch(() => null);
-        return;
-      }
-
-      await interaction.deferReply(ephemeralOpts);
-
-      if (actiune === 'start') {
-        startGuardMonitorForGuild(guild, targetChannel);
-      }
-
-      const scanRes = await scanChannelForViolations(guild, targetChannel);
-      const summaryLines = [
-        actiune === 'start'
-          ? `✅ Detecția AI `/start1` a pornit pe <#${targetChannel.id}> (verificare la ${Math.round(GUARD_INTERVAL_MS / 1000)}s).`
-          : `🔍 Scanare AI finalizată pe <#${targetChannel.id}>.`,
-        `Mesaje analizate: **${scanRes.checked}** | Sancțiuni aplicate: **${scanRes.punished}**.`,
-      ];
-
-      if (scanRes.details.length) {
-        summaryLines.push('', ...scanRes.details);
-      }
-
-      await interaction.editReply(summaryLines.join('\n')).catch(() => null);
+      await handleStart1Command(interaction, guild, ephemeralOpts);
       return;
     }
 
